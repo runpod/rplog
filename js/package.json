@@ -1,0 +1,12 @@
+{
+    "name": "rplog",
+    "version": "0.1.0",
+    "description": "runpod's cross-platform logging library",
+    "author": {
+        "name": "efron licht (runpod.io)",
+        "email": "efron.licht@runpod.io"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.16"
+    }
+}
