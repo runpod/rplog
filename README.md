@@ -29,7 +29,7 @@ Logs are written to stderr in JSON format. All logs contain a "metadata" field t
 
 ### Log Levels
 
-We provide 5 log levels:
+We provide 4 log levels:
 
 | Level | Description | Example |
 |-------|-------------| ------- |
@@ -42,9 +42,18 @@ We provide 5 log levels:
 Generally speaking, `WARN` is to be avoided. If you're logging a warning, you should probably be logging an `ERROR` instead. `DEBUG` should be used sparingly, and `INFO` should be used for anything that is not an error.
 
 
-### Populating your logs with metadata
+### Populating your logs with metadata via the `buildmeta` tool
 
-See the [buildmeta README](./go/cmd/README.md) for information on how to populate your logs with metadata.
+We provide a command-line tool, [buildmeta](./go/cmd/README.md), to populate your logs with metadata. The [releases page](https://github.com/runpod/rplog/releases/) will contain pre-built binaries ready for use: pick the appropriate binary for your platform and put it in your `PATH`.
+
+| OS | ARCH | Binary | Notes |
+|----|------|--------| ------- |
+| Linux or WSL | amd64 | buildmeta_amd64_linux | you probably want this |
+| macOS | amd64 | buildmeta_amd64_darwin | older intel macs|
+| macOS | arm64 | buildmeta_arm64_darwin | newer apple silicon macs |
+| Windows (not WSL) | amd64 | buildmeta_amd64_windows.exe | you probably don't want this |
+
+See the [buildmeta README](./go/cmd/README.md) for information on how to populate your logs with metadata. In short, you should run `buildmeta` as part of your deployment process to inject the build-time metadata into your application, either by generating a `.py` or `.js` file at 'compile time', or by writing a JSON or environment file to disk that's read at runtime.
 
 ### Logs: Environment Variables
 
@@ -56,10 +65,11 @@ See the [buildmeta README](./go/cmd/README.md) for information on how to populat
 | RUNPOD_SERVICE_VERSION | The version of the service that is running. | unknown |
 | RUNPOD_SERVICE_COMMIT_HASH | The git commit hash of the code that is running. | unknown |
 
+## Timestamps:
+All timestamps should be RFC3339 in UTC, a subset of ISO8601. For example: `2020-06-01T00:00:00Z`. 
 
 
 ## Tracing
 Traces consist of a `request_id`, a `trace_id`, and the `trace_start` timestamp. A `trace_id` should begin when an "event" starts in our system (i.e, a customer request comes in, a cron job starts, etc) and travels across services. A `request_id` is a unique identifier for a single request: i.e, within the bounds of a single service. A trace may outlive a request, but a request will always be part of a trace.
 
-Traces are carried across service boundaries in HTTP requests via the `X-Request-Id` and `X-Trace-Id` headers. The start time of the trace is carried in the `X-Trace-Start` header, in RFC3339 format (i.e, `2020-06-01T00:00:00Z`). **All times should always be UTC: runpod is a global organization**.
 
