@@ -1,4 +1,14 @@
-// The buildmeta command generates a file which exports the metadata of the current build as environment variables (i.e, a shell script).
+// The buildmeta command generates a file which exports the metadata of the current build in a variety of formats.
+// Usage: buildmeta [-dir <dir>] -env <env> -service <service> [-format <format>] [-revision <revision>]
+// Where:
+//
+//	-dir: optional: directory to run git commands in (default ".")
+//	-env: mandatory: the environment to build for. usually 'dev' or 'prod'
+//	-service: mandatory: the name of the service
+//	-format: output format: env, json, python, javascript (default "env")
+//	-revision: optional: git revision to check (default "HEAD")
+//
+// The output is written to stdout. Use standard shell redirection to save it to a file: e.g, buildmeta -env dev -service myservice -format python > metadata.py
 package main
 
 import (
@@ -81,8 +91,8 @@ func main() {
 		o.VCS.Time = time.Unix(int64(commitOffset), 0).UTC().Format(time.RFC3339)
 	}
 	// print output to stdout.
-	switch outputFormat {
-	case "env":
+	switch strings.ToLower(outputFormat) {
+	case "env", "sh":
 		for _, v := range [...]struct{ key, val string }{
 			{"RUNPOD_SERVICE_NAME", o.Service},
 			{"RUNPOD_ENV", o.Env},
@@ -100,7 +110,7 @@ func main() {
 		e := json.NewEncoder(os.Stdout)
 		e.SetIndent("", "  ")
 		e.Encode(o)
-	case "python":
+	case "python", "py":
 		// first, we inline the uuid7.py file, then we print the metadata as a python dictionary.
 		const format = `%s #
 import datetime
@@ -117,7 +127,7 @@ metadata = {
 }
 `
 		fmt.Printf(format, uuid7py, o.Service, o.Env, o.VCS.Commit, o.VCS.Tag, o.VCS.Time, o.VCS.Name)
-	case "js":
+	case "js", "javascript":
 		// first, we inline the uuid7.js file, then we print the metadata as a javascript object.
 		const format = `%s
 import { uuidv7 } from "uuidv7"
