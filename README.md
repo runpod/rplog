@@ -2,6 +2,7 @@
 
 rplog is runpod's logging and tracing package. It provides a uniform logging implementation across all 3 of Runpod's major languages: Python, JavaScript, and Go. 
 
+
 | Language | Subdirectory |
 |----------|--------------|
 | Python | [./py](./py) |
@@ -41,7 +42,9 @@ We provide 5 log levels:
 Generally speaking, `WARN` is to be avoided. If you're logging a warning, you should probably be logging an `ERROR` instead. `DEBUG` should be used sparingly, and `INFO` should be used for anything that is not an error.
 
 
+### Populating your logs with metadata
 
+See the [buildmeta README](./go/cmd/README.md) for information on how to populate your logs with metadata.
 
 ### Logs: Environment Variables
 
@@ -56,9 +59,7 @@ Generally speaking, `WARN` is to be avoided. If you're logging a warning, you sh
 
 
 ## Tracing
-Traces consist of a `request_id` and a `trace_id`. A `trace_id` should begin when an "event" starts in our system (i.e, a customer request comes in, a cron job starts, etc) and travels across services. A `request_id` is a unique identifier for a single request: i.e, within the bounds of a single service. A trace may outlive a request, but a request will always be part of a trace.
+Traces consist of a `request_id`, a `trace_id`, and the `trace_start` timestamp. A `trace_id` should begin when an "event" starts in our system (i.e, a customer request comes in, a cron job starts, etc) and travels across services. A `request_id` is a unique identifier for a single request: i.e, within the bounds of a single service. A trace may outlive a request, but a request will always be part of a trace.
 
 Traces are carried across service boundaries in HTTP requests via the `X-Request-Id` and `X-Trace-Id` headers. The start time of the trace is carried in the `X-Trace-Start` header, in RFC3339 format (i.e, `2020-06-01T00:00:00Z`). **All times should always be UTC: runpod is a global organization**.
-
-
 

@@ -18,7 +18,7 @@ Usage of /tmp/go-build3654420915/b001/exe/buildmeta:
   -env string
         mandatory: the environment to build for. usually 'dev' or 'prod'
   -format string
-        output format: env or json (default "env")
+        output format: env, json, python, javascript
   -revision string
         optional: git revision to check (default "HEAD")
   -service string

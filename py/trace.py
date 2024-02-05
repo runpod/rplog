@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid7 import uuid7
+from typing import Optional
 def as_rfc3339(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4]+"Z"
+
+
 
 @dataclass
 class Trace:
@@ -17,8 +20,13 @@ class Trace:
 
     @staticmethod
     def from_headers(headers: dict[str, str]) -> "Trace":
+        """get a trace from a dictionary of headers, or create a new one if it doesn't exist.
+        this will over-write the global trace.
+        """
+        global _trace
         now = as_rfc3339(datetime.now())
-        return Trace(
+
+        t = Trace(
             request_id=headers.get("X-Request-ID", str(uuid7())),
             request_source=headers.get("X-Request-Source", "unknown"),
             request_start=headers.get("X-Request-Start", now),
@@ -26,12 +34,27 @@ class Trace:
             trace_source=headers.get("X-Trace-Source", "unknown"),
             trace_start=headers.get("X-Trace-Start", now)
         )
-    
+        _trace = t
+        return t
+    @classmethod
+    def current(cls) -> "Trace":
+        """get the current trace. if none exists, this will create a new one.
+        this function is only safe to use in a single-threaded environment:
+        if you are using asyncio or other concurrency features, 
+        you will need to pass the trace object around explicitly or use 
+        something like flask's request context to store it."""
+        global _trace
+        if _trace is not None:
+            return _trace
+        _trace = Trace.new()
+        return _trace
+
     @staticmethod
     def new():
-        """start a fresh trace"""
+        """start a fresh trace and return it, overwriting the global trace if it exists."""
         now = as_rfc3339(datetime.datetime.now())
-        return Trace(
+        global _trace
+        t = Trace(
             request_id=str(uuid7.uuid7()),
             request_source="unknown",
             request_start=now,
@@ -39,6 +62,8 @@ class Trace:
             trace_source="unknown",
             trace_start=now
         )
+        _trace = t
+        return t
     
     def save_to_headers(self, headers: dict[str, str]) -> None:
         """save the trace to a dictionary of headers in preparation for an HTTP request.
@@ -47,3 +72,6 @@ class Trace:
         headers["X-Request-Source"] = self.request_source
         headers["X-Request-Start"] = as_rfc3339(datetime.now())
         headers["X-Trace-ID"] = self.trace_id
+
+"""the current trace, if any. this is only valid in a truly single-threaded environment."""
+_trace: Optional[Trace] = None

@@ -21,6 +21,7 @@ export const log = (msg: string, level="info", fields ={}, include_metadata=true
         stack = stack.slice(1, stack_depth+1)
         fields["stack"] = stack
     }
+    // TODO: add metadata
     fields["level"] = level
     fields["msg"] = msg
     fields["time"] = (new Date()).toISOString()
@@ -28,19 +29,8 @@ export const log = (msg: string, level="info", fields ={}, include_metadata=true
 }
 
 var metacache = {}
-const parsemetadata = (metadata: string) => {
-    if (metacache[metadata]) {
-        return metacache[metadata]
-    }
-    let parts = metadata.split(",")
-    let obj = {}
-    for (let part of parts) {
-        let [key, value] = part.split("=")
-        obj[key] = value
-    }
-    metacache[metadata] = obj
-    return obj
-}
+
+
 
 
 

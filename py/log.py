@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import uuid
+import trace
 from datetime import datetime, timezone
 from typing import Any, Optional, TextIO
 
@@ -85,10 +86,9 @@ def init(*, log_level: Optional[LogLevel] = None, log_output: Optional[TextIO] =
     if log_level == LogLevel.TRACE:
         _TRACE_ENABLED, _DEBUG_ENABLED, _INFO_ENABLED, _WARN_ENABLED, _ERROR_ENABLED = True, True, True, True, True
         return
-    
+
     if log_output is not None:
         _LOG_OUTPUT = log_output
-
 
 
 def log_at(level: LogLevel, msg: str, skip=2, *,  extra_debug_info=False, fp: Optional[TextIO] = None, **kwargs):
@@ -116,8 +116,21 @@ def log_at(level: LogLevel, msg: str, skip=2, *,  extra_debug_info=False, fp: Op
 
     if fp is None:
         fp = LOG_OUTPUT  # type: ignore
-    obj = {**_BASE_ARGS, **kwargs, "time": datetime.now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4]+"Z",
-           "level": level.name, "message": msg}
+
+    # add the trace to the log message
+    t = trace.Trace.current()
+
+    obj = {**_BASE_ARGS, **kwargs,
+           "msg": msg,
+           "level": level.name,
+           "request_id": t.request_id,
+           "request_source": t.request_source,
+           "request_start": t.request_start,
+           "time": datetime.now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4]+"Z",
+           "trace_id": t.trace_id,
+           "trace_source": t.trace_source,
+           "trace_start": t.trace_start,
+           }
 
     json.dump(obj, fp, cls=friendlyjson.Encoder)
     fp.write("\n")  # json.dump doesn't add a newline, so we do it manually
@@ -163,14 +176,4 @@ def error(msg: str, skip=2, **kwargs):
     unlike the other functions in this module, this function flushes the log file after writing the message.
     kwargs will be added as JSON fields."""
     log_at(LogLevel.ERROR, msg, skip=skip,
-           extra_debug_info=_EXTRA_DEBUG_INFO, **kwargs)
-
-
-def trace(msg: str, skip=2, **kwargs):
-    if not _TRACE_ENABLED:
-        return
-    """log a message at the trace level (4).
-    if _LOG_LEVEL is less than 4, this function does nothing.
-    kwargs will be added as JSON fields."""
-    log_at(LogLevel.TRACE, msg, skip=skip,
            extra_debug_info=_EXTRA_DEBUG_INFO, **kwargs)

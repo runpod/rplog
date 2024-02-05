@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +15,12 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed uuid7.js
+var uuid7js []byte
+
+//go:embed uuid7.py
+var uuid7py []byte
 
 func run(cmd string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -28,7 +35,7 @@ func run(cmd string, args ...string) string {
 }
 
 type Output struct {
-	VCS          struct{ Name, Commit, Tag, Time string }
+	VCS          struct{ Name, Commit, Tag, Time string } // Version Control System, e.g. git
 	Env, Service string
 }
 
@@ -41,7 +48,7 @@ func main() {
 		flag.StringVar(&dir, "dir", ".", "optional: directory to run git commands in")
 		flag.StringVar(&o.Env, "env", "", "mandatory: the environment to build for. usually 'dev' or 'prod'")
 		flag.StringVar(&o.Service, "service", "", "mandatory: the name of the service")
-		flag.StringVar(&outputFormat, "format", "env", "output format: env or json")
+		flag.StringVar(&outputFormat, "format", "env", "output format: env, json, python, javascript")
 		flag.StringVar(&revision, "revision", "HEAD", "optional: git revision to check")
 		flag.Parse()
 		switch {
@@ -66,7 +73,6 @@ func main() {
 		o.VCS.Name = "git"
 		o.VCS.Commit = run("git", "rev-parse", revision)
 		o.VCS.Tag = run("git", "tag", "--points-at", revision)
-		const layout = "2024-02-03 07:20:42 -0800"
 		commitOffset, err := strconv.Atoi(run("git", "show", "-s", "--format=%at", revision))
 		if err != nil {
 			panic(fmt.Errorf("could not parse git commit time: %w", err))
@@ -94,5 +100,39 @@ func main() {
 		e := json.NewEncoder(os.Stdout)
 		e.SetIndent("", "  ")
 		e.Encode(o)
+	case "python":
+		// first, we inline the uuid7.py file, then we print the metadata as a python dictionary.
+		const format = `%s #
+import datetime
+def as_rfc3339(dt: datetime.datetime) -> str:
+    return dt.astimezone(datetime.timezone.utc).strftime("%%Y-%%m-%%dT%%H:%%M:%%S.%%f")[:-4]+"Z"
+metadata = {
+	"instance_id": str(uuid7()),
+	"service_name": %q,
+	"service_env": %q,
+	"service_vcs_commit": %q,
+	"service_vcs_tag": %q,
+	"service_vcs_time": as_rfc3339(datetime.datetime.fromisoformat(%q)),
+	"service_vcs_name": %q,
+}
+`
+		fmt.Printf(format, uuid7py, o.Service, o.Env, o.VCS.Commit, o.VCS.Tag, o.VCS.Time, o.VCS.Name)
+	case "js":
+		// first, we inline the uuid7.js file, then we print the metadata as a javascript object.
+		const format = `%s
+import { uuidv7 } from "uuidv7"
+export const metadata = {
+	instance_id: uuidv7(),
+	service_name: %q,
+	service_env: %q,
+	service_vcs_commit: %q,
+	service_vcs_tag: %q,
+	service_vcs_time: (new Date(%q)).toISOString(),
+	service_vcs_name: %q,
+}
+`
+		fmt.Printf(format, uuid7js, o.Service, o.Env, o.VCS.Commit, o.VCS.Tag, o.VCS.Time, o.VCS.Name)
+	default:
+		log.Fatalf("unknown output format %q", outputFormat)
 	}
 }
