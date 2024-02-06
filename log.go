@@ -2,6 +2,7 @@ package rplog
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -52,15 +53,25 @@ func With(args ...any) *slog.Logger { return Log().With(args...) }
 
 // Log returns a handle to the initialized logger. All other functions in this package are just wrappers around this one.
 // The first call initializes the package: further calls return the same logger.
-func Log() *slog.Logger { once.Do(initEager); return logger }
+func Log() *slog.Logger { once.Do(func() { initEager(os.Stderr) }); return logger }
 
-// Initalize the package without returning the logger. This is unnecessary in most cases, but if you want
-// to initialize the logger eagerly without using it, you can call this function.
-func Init() { Log() }
+// Initalize the package with one or more writers. This is optional: if you don't call it, the package will initialize itself with a default writer (os.Stderr)
+func Init(writers ...io.Writer) {
+	once.Do(func() { initEager(writers...) })
+}
 
 // eagerly initialize the package. called exactly once by Log.
-func initEager() {
-	jsonHandler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
+func initEager(writers ...io.Writer) {
+	var w io.Writer
+	switch len(writers) {
+	case 0:
+		panic("rplog.Init: no writers provided")
+	case 1:
+		w = writers[0]
+	default:
+		w = io.MultiWriter(writers...)
+	}
+	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
 	m := metadata.Get()
 	logger = slog.New(&Handler{Handler: jsonHandler, metadata: slog.Group(
 		"meta",
