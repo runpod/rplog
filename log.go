@@ -168,7 +168,7 @@ func send(buf *bytes.Buffer, apiKey, url string, batch []json.RawMessage) error 
 // InitDatadog initializes the datadog logger with the given API key. It should be called once at the start of the program.
 func InitDatadog(ctx context.Context, apiKey string) {
 	once.Do(func() {
-		logEvents := make(writer, 1000)
+		logEvents := make(datadogBatchWriter, 1000)
 		Init(os.Stderr, logEvents)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -208,7 +208,7 @@ func collectAndSendBatches(ctx context.Context, apiKey string, in <-chan json.Ra
 }
 
 // "Write" a log entry to datadog by sending it to the channel to be read by `collectAndSendBatches`
-func (w writer) Write(b []byte) (int, error) {
+func (w datadogBatchWriter) Write(b []byte) (int, error) {
 	if len(b) > maxLogSize {
 		return 0, fmt.Errorf("log entry too large: %d bytes > %d bytes", len(b), maxLogSize)
 	}
@@ -220,4 +220,4 @@ func (w writer) Write(b []byte) (int, error) {
 	}
 }
 
-type writer chan json.RawMessage
+type datadogBatchWriter chan json.RawMessage
