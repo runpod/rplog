@@ -30,19 +30,19 @@ var (
 	logger *slog.Logger // cached logger instance. this is usually synonymous with slog.Default, but we cache it here to avoid the overhead of calling slog.Default repeatedly.
 )
 
-// DebugContext logs at LevelDebug with the given context, initializing the logger if necessary.
-func DebugContext(ctx context.Context, msg string, args ...any) {
+// Debug logs at LevelDebug with the given context, initializing the logger if necessary.
+func Debug(ctx context.Context, msg string, args ...any) {
 	Log().DebugContext(ctx, msg, args...)
 }
 
-// InfoContext logs at LevelInfo with the given context, initializing the logger if necessary.
-func InfoContext(ctx context.Context, msg string, args ...any) { Log().InfoContext(ctx, msg, args...) }
+// Info logs at LevelInfo with the given context, initializing the logger if necessary.
+func Info(ctx context.Context, msg string, args ...any) { Log().InfoContext(ctx, msg, args...) }
 
-// WarnContext logs at LevelWarn with the given context, initializing the logger if necessary.
-func WarnContext(ctx context.Context, msg string, args ...any) { Log().WarnContext(ctx, msg, args...) }
+// Warn logs at LevelWarn with the given context, initializing the logger if necessary. This is essentially an alias for Log().WarnContext.
+func Warn(ctx context.Context, msg string, args ...any) { Log().WarnContext(ctx, msg, args...) }
 
-// ErrorContext logs at LevelError with the given context, initializing the logger if necessary.
-func ErrorContext(ctx context.Context, msg string, args ...any) {
+// Error logs at LevelError with the given context, initializing the logger if necessary.
+func Error(ctx context.Context, msg string, args ...any) {
 	Log().ErrorContext(ctx, msg, args...)
 }
 
@@ -51,9 +51,14 @@ func LogAttrs(ctx context.Context, lvl slog.Level, msg string, attrs ...slog.Att
 	Log().LogAttrs(ctx, lvl, msg, attrs...)
 }
 
-// With returns a Logger that includes the given attributes in each output operation. Arguments are converted to attributes as if by [Logger.Log].
+// With returns a Logger that includes the given attributes in each output operation. See the documentation for [log/slog.Logger.With].
+// Arguments are converted to attributes as if by [Logger.Log].
 // It initializes the logger if necessary.
 func With(args ...any) *slog.Logger { return Log().With(args...) }
+
+// WithGroup returns a Logger that includes the given group in each output operation. See the documentation for [Logger.WithGroup].
+// It initializes the logger if necessary.
+func WithGroup(group string) *slog.Logger { return Log().WithGroup(group) }
 
 // Log returns a handle to the initialized logger. All other functions in this package are just wrappers around this one.
 // The first call initializes the package: further calls return the same logger.
