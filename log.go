@@ -5,10 +5,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
-	"github.com/runpod/rplog/metadata"
 	"github.com/runpod/rplog/trace"
 	"gitlab.com/efronlicht/enve"
 )
@@ -58,15 +58,21 @@ func WithGroup(group string) *slog.Logger { return Log().WithGroup(group) }
 
 // Log returns a handle to the initialized logger. All other functions in this package are just wrappers around this one.
 // The first call initializes the package: further calls return the same logger.
-func Log() *slog.Logger { once.Do(func() { initEager(os.Stderr) }); return logger }
+func Log() *slog.Logger { once.Do(func() { initEager(nil, os.Stderr) }); return logger }
 
 // Initalize the package with one or more writers. This is optional: if you don't call it, the package will initialize itself with a default writer (os.Stderr)
-func Init(writers ...io.Writer) {
-	once.Do(func() { initEager(writers...) })
+func Init(m *Metadata, writers ...io.Writer) {
+	once.Do(func() { initEager(m, writers...) })
+}
+
+// see buildmeta.go for the definition of Metadata
+type Metadata = struct {
+	InstanceID, Service, Env string
+	VCS                      struct{ Name, Commit, Tag, Time string }
 }
 
 // eagerly initialize the package. called exactly once by Log.
-func initEager(writers ...io.Writer) {
+func initEager(m *Metadata, writers ...io.Writer) {
 	var w io.Writer
 	switch len(writers) {
 	case 0:
@@ -77,19 +83,17 @@ func initEager(writers ...io.Writer) {
 		w = io.MultiWriter(writers...)
 	}
 	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
-	m := metadata.Get()
-	logger = slog.New(&Handler{Handler: jsonHandler, metadata: slog.Group(
-		"meta",
-		slog.String("checksum", m.Checksum),
-		slog.String("commit", m.Commit),
+	logger := slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
+		slog.String("vcs_name", m.VCS.Name),
+		slog.String("vcs_commit", m.VCS.Commit),
+		slog.String("vcs_tag", m.VCS.Tag),
+		slog.String("vcs_time", m.VCS.Time),
 		slog.String("env", m.Env),
 		slog.String("instance_id", m.InstanceID),
-		slog.String("language_version", m.LanguageVersion),
-		slog.String("repo_path", m.RepoPath),
-		slog.String("service_start", m.ServiceStart),
-		slog.String("service_version", m.ServiceVersion),
-		slog.String("service", m.ServiceName),
-	)})
+		slog.String("service", m.Service),
+		slog.String("language_version", runtime.Version()),
+	})})
+
 	slog.SetDefault(logger)
 }
 

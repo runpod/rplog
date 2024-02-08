@@ -106,6 +106,20 @@ func main() {
 			}
 			fmt.Printf("export %q=%q\n", v.key, strings.TrimSpace(v.val))
 		}
+	case "go", "golang":
+		fmt.Printf(`const
+package main
+import "github.com/google/uuid"
+var metadata = struct {
+	InstanceID, Service, Env, string
+	VCS struct {	Name, Commit, Tag, Time string}
+}{
+	InstanceID: uuid.New().String(),
+	Service: %q,
+	Env: %q,
+	VCS: struct {Name, Commit, Tag, Time string}{ %q, %q, %q, %q,}
+}`, o.Service, o.Env, o.VCS.Commit, o.VCS.Tag, o.VCS.Time, o.VCS.Name)
+
 	case "rust", "rs":
 		// no need to inline the uuid7.rs file. just export it as a rust module.
 		fmt.Printf(`
