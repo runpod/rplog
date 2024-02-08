@@ -108,12 +108,13 @@ func main() {
 		}
 	case "rust", "rs":
 		// no need to inline the uuid7.rs file. just export it as a rust module.
-		fmt.Printf(`SERVICE: &str = %q;
-ENV: &str = %q;
-VCS_COMMIT: &str = %q;
-VCS_TAG: &str = %q;
-VCS_TIME: &str = %q;
-VCS_NAME: &str = %q;
+		fmt.Printf(`
+pub const SERVICE: &str = %q;
+pub const ENV: &str = %q;
+pub const VCS_COMMIT: &str = %q;
+pub const VCS_TAG: &str = %q;
+pub const VCS_TIME: &str = %q;
+pub const VCS_NAME: &str = %q;
 `, o.Service, o.Env, o.VCS.Commit, o.VCS.Tag, o.VCS.Time, o.VCS.Name)
 	case "json":
 		e := json.NewEncoder(os.Stdout)
