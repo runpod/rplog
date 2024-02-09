@@ -2,6 +2,7 @@ package rplog
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -19,7 +20,6 @@ import (
 // Generally speaking, you don't need to use this directly.
 type Handler struct {
 	slog.Handler
-	metadata slog.Attr // pre-marshalled Metadata
 }
 
 var (
@@ -88,7 +88,11 @@ func initEager(m *Metadata, writers ...io.Writer) {
 		m = &Metadata{}
 		buildinfo, ok := debug.ReadBuildInfo()
 		if !ok {
-			buildinfo = &debug.BuildInfo{}
+			m.VCSName = "unknown"
+			m.VCSCommit = "unknown"
+			m.VCSTag = "unknown"
+			m.VCSTime = "unknown"
+			goto FILLED
 		}
 		for _, v := range buildinfo.Settings {
 			switch v.Key {
@@ -103,9 +107,11 @@ func initEager(m *Metadata, writers ...io.Writer) {
 			}
 		}
 	}
+FILLED:
+	fmt.Println("rplog.initEager: found metadata", m)
 
 	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
-	logger := slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
+	logger = slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
 		slog.String("vcs_name", m.VCSName),
 		slog.String("vcs_commit", m.VCSCommit),
 		slog.String("vcs_tag", m.VCSTag),
@@ -126,15 +132,11 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		traceElapsedMs := now.Sub(t.TraceStart).Milliseconds()
 		requestElapsedMs := now.Sub(t.RequestStart).Milliseconds()
 		r.AddAttrs(
-			h.metadata,
-			slog.Group("trace",
-				slog.String("trace_id", t.TraceID),
-				slog.String("request_id", t.RequestID),
-				slog.Int64("trace_elapsed_ms", traceElapsedMs),
-				slog.Int64("request_elapsed_ms", requestElapsedMs),
-			))
-	} else {
-		r.AddAttrs(h.metadata)
+			slog.String("trace_id", t.TraceID),
+			slog.String("request_id", t.RequestID),
+			slog.Int64("trace_elapsed_ms", traceElapsedMs),
+			slog.Int64("request_elapsed_ms", requestElapsedMs),
+		)
 	}
 	return h.Handler.Handle(ctx, r)
 }
