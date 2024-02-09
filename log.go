@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -66,12 +67,13 @@ func Init(m *Metadata, writers ...io.Writer) {
 }
 
 // see buildmeta.go for the definition of Metadata
-type Metadata = struct {
-	InstanceID, Service, Env string
-	VCS                      struct{ Name, Commit, Tag, Time string }
+type Metadata struct {
+	InstanceID, Service, Env            string
+	VCSName, VCSCommit, VCSTag, VCSTime string
 }
 
 // eagerly initialize the package. called exactly once by Log.
+// it's OK to use nil for the metadata: this program will fill in on a best-effort basis.
 func initEager(m *Metadata, writers ...io.Writer) {
 	var w io.Writer
 	switch len(writers) {
@@ -82,12 +84,32 @@ func initEager(m *Metadata, writers ...io.Writer) {
 	default:
 		w = io.MultiWriter(writers...)
 	}
+	if m == nil {
+		m = &Metadata{}
+		buildinfo, ok := debug.ReadBuildInfo()
+		if !ok {
+			buildinfo = &debug.BuildInfo{}
+		}
+		for _, v := range buildinfo.Settings {
+			switch v.Key {
+			case "vcs":
+				m.VCSName = v.Value
+			case "vcs.revision", "vcs.commit":
+				m.VCSCommit = v.Value
+			case "vcs.tag":
+				m.VCSTag = v.Value
+			case "vcs.time":
+				m.VCSTime = v.Value
+			}
+		}
+	}
+
 	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
 	logger := slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
-		slog.String("vcs_name", m.VCS.Name),
-		slog.String("vcs_commit", m.VCS.Commit),
-		slog.String("vcs_tag", m.VCS.Tag),
-		slog.String("vcs_time", m.VCS.Time),
+		slog.String("vcs_name", m.VCSName),
+		slog.String("vcs_commit", m.VCSCommit),
+		slog.String("vcs_tag", m.VCSTag),
+		slog.String("vcs_time", m.VCSTime),
 		slog.String("env", m.Env),
 		slog.String("instance_id", m.InstanceID),
 		slog.String("service", m.Service),

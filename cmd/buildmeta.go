@@ -89,7 +89,6 @@ func main() {
 
 		o.VCSTime = time.Unix(int64(commitOffset), 0).UTC().Format(time.RFC3339)
 	}
-	fmt.Println(metadata)
 	// print output to stdout.
 	switch strings.ToLower(outputFormat) {
 	case "env", "sh":
