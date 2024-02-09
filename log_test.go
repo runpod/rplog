@@ -1,10 +1,12 @@
 package rplog
 
 import (
-	"context"
+	"log/slog"
+	"os"
 	"testing"
 )
 
 func TestLog(t *testing.T) {
-	Error(context.TODO(), "hi")
+	Init(nil, os.Stderr)
+	slog.Error("hi")
 }
