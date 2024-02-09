@@ -108,13 +108,12 @@ func main() {
 package main
 import "github.com/runpod/rplog"
 import "github.com/google/uuid"
-var metadata rplog.Metadata
-func init() {
+var metadata rplog.Metadata = func() rplog.Metadata {
 	id, err := uuid.NewV7()
 	if err != nil {
 		id = uuid.New()
 	}
-	metadata = rplog.Metadata{
+	return rplog.Metadata{
 		InstanceID: id.String(),
 		Service: %q,
 		Env: %q,
@@ -123,7 +122,7 @@ func init() {
 		VCSTime: %q,
 		VCSName: %q,
 	}
-}
+}()
 `, o.Service, o.Env, o.VCSCommit, o.VCSTag, o.VCSTime, o.VCSName)
 
 	case "rust", "rs":

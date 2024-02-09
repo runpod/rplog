@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"runtime"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/runpod/rplog/trace"
@@ -20,11 +19,6 @@ import (
 type Handler struct {
 	slog.Handler
 }
-
-var (
-	once   sync.Once    // guards initialization of the logger
-	logger *slog.Logger // cached logger instance. this is usually synonymous with slog.Default, but we cache it here to avoid the overhead of calling slog.Default repeatedly.
-)
 
 // see buildmeta.go for the definition of Metadata
 type Metadata struct {
