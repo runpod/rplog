@@ -5,7 +5,6 @@ I simplified the API somewhat, since we only need strings.
 The original comments are preserved, and I inlined the MIT license.
 """
 
-
 """
 Implementation of UUID v7 per the October 2021 draft update
 to RFC4122 from 2005:
@@ -47,15 +46,21 @@ __all__ = (
     "uuid_to_datetime",
 )
 
-from typing import Callable, Optional
+from typing import Optional
 import os
 import time
 
-def uuid7(ns: Optional[int] = None, _last=[0, 0, 0, 0],_last_as_of=[0, 0, 0, 0]) -> str:
+
+_last = [0, 0, 0, 0]
+_last_as_of = [0, 0, 0, 0]
+
+
+def uuid7(ns: Optional[int] = None) -> str:
     """generate a UUIDv7 as a hexidecimal string.
     uuid7s are based on the current time in nanoseconds since the Unix epoch, adding some bits of randomness and a sequence number to ensure uniqueness.
     See the original code or the RFC for more details.
     """
+    global _last, _last_as_of
     if ns is None:
         ns = time.time_ns()
         last = _last
@@ -97,22 +102,4 @@ def uuid7(ns: Optional[int] = None, _last=[0, 0, 0, 0],_last_as_of=[0, 0, 0, 0])
         # Six random bytes for the lower part of the uuid
         rand = os.urandom(6)
 
-
     return f"{t1:>08x}-{t2:>04x}-{t3:>04x}-{t4:>04x}-{rand.hex()}"
-
-
-
-
- #
-import datetime
-def as_rfc3339(dt: datetime.datetime) -> str:
-    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4]+"Z"
-metadata = {
-	"instance_id": str(uuid7()),
-	"service_name": "ai-api",
-	"service_env": "prod",
-	"service_vcs_commit": "ec205e4edf36d030c7728041f1362df8e36bdba8",
-	"service_vcs_tag": "",
-	"service_vcs_time": as_rfc3339(datetime.datetime.fromisoformat("2024-02-05T16:16:13Z")),
-	"service_vcs_name": "git",
-}

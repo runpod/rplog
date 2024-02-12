@@ -1,2 +1,4 @@
 buildmeta_*
 *.zst
+.vscode
+.DS_Store

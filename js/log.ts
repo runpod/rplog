@@ -28,7 +28,7 @@ export const log = (msg: string, level="info", fields ={}, include_metadata=true
     logfn(JSON.stringify( fields))
 }
 
-var metacache = {}
+
 
 
 
@@ -42,3 +42,6 @@ export const info = (msg: string, fields={}) => log(msg, 'info', fields, true, c
 export const warn = (msg: string, fields={}) => log(msg, 'warn', fields, true, console.log, 0)
 /**  log a message and optional fields at the error level. use the log fn directly if you want finer control over the log message*/
 export const error = (msg: string, fields={}) => log(msg, 'error', fields, true, console.log, -1)
+export default {
+    debug, info, warn, error, log
+}

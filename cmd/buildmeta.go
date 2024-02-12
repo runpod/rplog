@@ -28,9 +28,6 @@ import (
 	"github.com/runpod/rplog"
 )
 
-//go:embed uuid7.js
-var uuid7js []byte
-
 //go:embed uuid7.py
 var uuid7py []byte
 
@@ -147,30 +144,28 @@ def as_rfc3339(dt: datetime.datetime) -> str:
     return dt.astimezone(datetime.timezone.utc).strftime("%%Y-%%m-%%dT%%H:%%M:%%S.%%f")[:-4]+"Z"
 metadata = {
 	"instance_id": str(uuid7()),
-	"service_name": %q,
-	"service_env": %q,
-	"service_vcs_commit": %q,
-	"service_vcs_tag": %q,
-	"service_vcs_time": as_rfc3339(datetime.datetime.fromisoformat(%q)),
-	"service_vcs_name": %q,
+	"service": %q,
+	"env": %q,
+	"vcs_commit": %q,
+	"vcs_tag": %q,
+	"vcs_time": as_rfc3339(datetime.datetime.fromisoformat(%q)),
+	"vcs_name": %q,
 }
 `
 		fmt.Printf(format, uuid7py, o.Service, o.Env, o.VCSCommit, o.VCSTag, o.VCSTime, o.VCSName)
 	case "js", "javascript":
-		// first, we inline the uuid7.js file, then we print the metadata as a javascript object.
-		const format = `%s
-import { uuidv7 } from "uuidv7"
+		const format = `import {randomUUID } from "crypto"
 export const metadata = {
-	instance_id: uuidv7(),
-	service_name: %q,
-	service_env: %q,
-	service_vcs_commit: %q,
-	service_vcs_tag: %q,
-	service_vcs_time: (new Date(%q)).toISOString(),
-	service_vcs_name: %q,
+	instance_id: randomUUID(),
+	service: %q,
+	env: %q,
+	vcs_commit: %q,
+	vcs_tag: %q,
+	vcs_time: (new Date(%q)).toISOString(),
+	vcs_name: %q,
 }
 `
-		fmt.Printf(format, uuid7js, o.Service, o.Env, o.VCSCommit, o.VCSTag, o.VCSTime, o.VCSName)
+		fmt.Printf(format, o.Service, o.Env, o.VCSCommit, o.VCSTag, o.VCSTime, o.VCSName)
 	default:
 		log.Fatalf("unknown output format %q", outputFormat)
 	}
