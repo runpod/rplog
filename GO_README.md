@@ -110,6 +110,43 @@ bloat your logs.
 The [`buildmeta`](./cmd/README.md) tool emits the remaining `RUNPOD_*` build
 variables for your deployment.
 
+## Design notes: per-line metadata
+
+`Init` keeps each record lean. Only `vcs_commit` — which uniquely identifies the
+build — is stamped on every line; the remaining VCS fields (`vcs_name`, which is
+essentially always `"git"`; `vcs_tag`; and `vcs_time`, derivable from the commit)
+are logged **once** in the `"rplog initialized"` startup record and can be joined
+back via `vcs_commit`. `AddSource` is off by default, since a source file/line
+block on every record is a large, mostly-redundant per-line cost.
+
+For a representative record this trims ~40% of the line (~195 bytes: ~130 from
+dropping the source block, ~65 from the VCS fields). Callers who want richer
+per-line context can build their own `slog.Handler` — see "Downstream usage".
+
+`Metadata.Fields()` still returns the **complete** metadata (all VCS fields +
+`instance_id`), so exporters that want the full set per event (e.g. Datadog tags)
+are unaffected by the per-line trim.
+
+## Downstream usage
+
+How RunPod services consume this package today (useful context if you change the
+logging schema):
+
+- **[`runpod/host`](https://github.com/runpod/host)** — the primary consumer. It
+  uses `rplog/trace` heavily (client/server middleware, `FromHeaderOrNew`) and
+  embeds `rplog.Metadata` in its logger config. It does **not** call `rplog.Init`;
+  instead it builds its own `slog` handler chain (level sampling, a Datadog tee,
+  its own `HandlerOptions`). The full VCS metadata reaches Datadog as **tags** via
+  `Metadata.Fields()`, while its JSON log lines carry a single `ver` field rather
+  than the individual `vcs_*` fields.
+- **`runpod/ai-api`** — does **not** use rplog; it has a home-grown logrus+slog
+  logger that stamps `service`, `env`, and `version` per line.
+
+Takeaway: both services log a single build/version identifier per line rather than
+the full VCS set, which is why `Init` now defaults to `vcs_commit`-only. Because
+`host` controls its own handler options, `Init`'s `AddSource` and per-line
+defaults affect only callers that use `Init` directly.
+
 ## Benchmarks
 
 See [BENCHMARKS.md](./BENCHMARKS.md) for performance numbers and the optimization

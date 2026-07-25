@@ -2,7 +2,6 @@ package rplog
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -62,25 +61,36 @@ func Init(m *Metadata, writers ...io.Writer) {
 	if m == nil {
 		m = metadataFromBuildInfo()
 	}
-	fmt.Println("rplog.initEager: found metadata", m)
 
-	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
+	// AddSource is off by default: a source file/line block on every record is a
+	// large per-line cost and is redundant with structured messages. Callers who
+	// want it can build their own handler.
+	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: false, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
 
 	host, err := os.Hostname()
 	if err != nil {
 		host = "unknown"
 	}
+	// Per-line attributes are kept lean. vcs_commit uniquely identifies the build,
+	// so the other VCS fields (vcs_name, which is essentially always "git";
+	// vcs_tag; vcs_time, derivable from the commit) are emitted once at startup
+	// below rather than on every record. They can be joined back via vcs_commit.
 	slog.SetDefault(slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
-		slog.String("vcs_name", m.VCSName),
 		slog.String("vcs_commit", m.VCSCommit),
-		slog.String("vcs_tag", m.VCSTag),
-		slog.String("vcs_time", m.VCSTime),
 		slog.String("env", m.Env),
 		slog.String("hostname", host),
 		slog.String("instance_id", m.InstanceID),
 		slog.String("service", m.Service),
 		slog.String("language_version", runtime.Version()),
 	})}))
+
+	// Emit the full build metadata exactly once, so the fields no longer stamped
+	// on every line remain available in the logs.
+	slog.Info("rplog initialized",
+		slog.String("vcs_name", m.VCSName),
+		slog.String("vcs_tag", m.VCSTag),
+		slog.String("vcs_time", m.VCSTime),
+	)
 }
 
 // metadataFromBuildInfo fills a Metadata on a best-effort basis from the binary's

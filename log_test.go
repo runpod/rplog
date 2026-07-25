@@ -113,6 +113,35 @@ func TestHandlerHandle(t *testing.T) {
 	})
 }
 
+// parseJSONLines splits a buffer of newline-delimited JSON logs into records.
+func parseJSONLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for ln := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		if ln == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(ln), &m); err != nil {
+			t.Fatalf("bad JSON line %q: %v", ln, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// findLine returns the first record whose "msg" matches, failing if none do.
+func findLine(t *testing.T, lines []map[string]any, msg string) map[string]any {
+	t.Helper()
+	for _, m := range lines {
+		if m["msg"] == msg {
+			return m
+		}
+	}
+	t.Fatalf("no log line with msg=%q found in %v", msg, lines)
+	return nil
+}
+
 func TestInit(t *testing.T) {
 	// Init mutates global slog state, so these run sequentially (not parallel).
 
@@ -125,15 +154,34 @@ func TestInit(t *testing.T) {
 		Init(nil)
 	})
 
-	t.Run("positive/single writer receives logs", func(t *testing.T) {
+	t.Run("positive/lean per-line, full metadata at startup", func(t *testing.T) {
 		var buf bytes.Buffer
-		Init(&Metadata{Service: "svc", Env: "test"}, &buf)
+		Init(&Metadata{
+			Service: "svc", Env: "test", VCSCommit: "abc123",
+			VCSName: "git", VCSTag: "v1.2.3", VCSTime: "2026-01-01T00:00:00Z",
+		}, &buf)
 		slog.Info("hello")
-		if !strings.Contains(buf.String(), "hello") {
-			t.Errorf("log not written to buffer: %q", buf.String())
+
+		lines := parseJSONLines(t, &buf)
+
+		// The startup line carries the full VCS metadata exactly once.
+		startup := findLine(t, lines, "rplog initialized")
+		for _, k := range []string{"vcs_name", "vcs_tag", "vcs_time", "vcs_commit"} {
+			if _, ok := startup[k]; !ok {
+				t.Errorf("startup line missing %q: %v", k, startup)
+			}
 		}
-		if !strings.Contains(buf.String(), `"service":"svc"`) {
-			t.Errorf("metadata not stamped: %q", buf.String())
+
+		// A normal line is lean: vcs_commit + service, but no vcs_name/tag/time
+		// and no source block.
+		hello := findLine(t, lines, "hello")
+		if hello["service"] != "svc" || hello["vcs_commit"] != "abc123" {
+			t.Errorf("per-line metadata wrong: %v", hello)
+		}
+		for _, k := range []string{"vcs_name", "vcs_tag", "vcs_time", "source"} {
+			if _, ok := hello[k]; ok {
+				t.Errorf("per-line record should not contain %q: %v", k, hello)
+			}
 		}
 	})
 
@@ -150,8 +198,10 @@ func TestInit(t *testing.T) {
 		var buf bytes.Buffer
 		Init(nil, &buf)
 		slog.Info("defaults")
-		if !strings.Contains(buf.String(), "vcs_name") {
-			t.Errorf("expected best-effort vcs metadata, got %q", buf.String())
+		lines := parseJSONLines(t, &buf)
+		// Best-effort VCS metadata lands on the startup line (not every line).
+		if _, ok := findLine(t, lines, "rplog initialized")["vcs_name"]; !ok {
+			t.Errorf("expected best-effort vcs_name on the startup line, got %v", lines)
 		}
 	})
 }
