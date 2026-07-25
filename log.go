@@ -43,8 +43,12 @@ func (m *Metadata) Fields() map[string]any {
 	}
 }
 
-// Initalize the package with one or more writers. This is optional: if you don't call it, the package will initialize itself with a default writer (os.Stderr)
-// it's OK to use nil for the metadata: this program will fill in on a best-effort basis.
+// Init sets up the package's slog handler and installs it as the slog default
+// (via slog.SetDefault), so afterwards you log with the standard log/slog package.
+// It requires at least one writer and panics if none are provided; multiple
+// writers are combined with io.MultiWriter.
+// It's OK to pass nil for the metadata: the VCS fields are then filled in on a
+// best-effort basis from the binary's build info.
 func Init(m *Metadata, writers ...io.Writer) {
 	var w io.Writer
 	switch len(writers) {
@@ -56,29 +60,8 @@ func Init(m *Metadata, writers ...io.Writer) {
 		w = io.MultiWriter(writers...)
 	}
 	if m == nil {
-		m = &Metadata{}
-		buildinfo, ok := debug.ReadBuildInfo()
-		if !ok {
-			m.VCSName = "unknown"
-			m.VCSCommit = "unknown"
-			m.VCSTag = "unknown"
-			m.VCSTime = "unknown"
-			goto FILLED
-		}
-		for _, v := range buildinfo.Settings {
-			switch v.Key {
-			case "vcs":
-				m.VCSName = v.Value
-			case "vcs.revision", "vcs.commit":
-				m.VCSCommit = v.Value
-			case "vcs.tag":
-				m.VCSTag = v.Value
-			case "vcs.time":
-				m.VCSTime = v.Value
-			}
-		}
+		m = metadataFromBuildInfo()
 	}
-FILLED:
 	fmt.Println("rplog.initEager: found metadata", m)
 
 	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
@@ -98,6 +81,34 @@ FILLED:
 		slog.String("service", m.Service),
 		slog.String("language_version", runtime.Version()),
 	})}))
+}
+
+// metadataFromBuildInfo fills a Metadata on a best-effort basis from the binary's
+// embedded VCS build settings. If no build info is available it falls back to
+// "unknown" for every VCS field.
+func metadataFromBuildInfo() *Metadata {
+	m := &Metadata{}
+	buildinfo, ok := debug.ReadBuildInfo()
+	if !ok {
+		m.VCSName = "unknown"
+		m.VCSCommit = "unknown"
+		m.VCSTag = "unknown"
+		m.VCSTime = "unknown"
+		return m
+	}
+	for _, v := range buildinfo.Settings {
+		switch v.Key {
+		case "vcs":
+			m.VCSName = v.Value
+		case "vcs.revision", "vcs.commit":
+			m.VCSCommit = v.Value
+		case "vcs.tag":
+			m.VCSTag = v.Value
+		case "vcs.time":
+			m.VCSTime = v.Value
+		}
+	}
+	return m
 }
 
 // Handle the log record, adding the metadata to it (always) and the Trace (if it exists).
