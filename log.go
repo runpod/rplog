@@ -104,8 +104,10 @@ FILLED:
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if t, ok := trace.FromCtx(ctx); ok {
 		now := time.Now()
-		traceElapsedMs := now.Sub(t.TraceStart).Milliseconds()
-		requestElapsedMs := now.Sub(t.RequestStart).Milliseconds()
+		// Clamp to 0: a Trace whose start is in the future (clock skew, or a
+		// hostile value smuggled in via CtxWith) must never yield a negative elapsed.
+		traceElapsedMs := max(now.Sub(t.TraceStart).Milliseconds(), 0)
+		requestElapsedMs := max(now.Sub(t.RequestStart).Milliseconds(), 0)
 		r.AddAttrs(
 			slog.String("trace_id", t.TraceID),
 			slog.String("request_id", t.RequestID),

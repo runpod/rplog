@@ -4,11 +4,18 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gitlab.com/efronlicht/enve"
 )
+
+// maxSourceLen bounds the length (in runes) of a service-name value read from an
+// untrusted header, so a hostile client cannot bloat every log record.
+const maxSourceLen = 64
 
 // Trace is a pair of IDs that can be used to trace a request through the system.
 // A TraceID is generated the first time Trace() is called on a request and transmitted across service boundaries via the X-Trace-ID header.
@@ -126,10 +133,14 @@ func newuuid() string {
 func FromHeaderOrNew(h http.Header) Trace {
 	now := time.Now().UTC()
 
-	var traceStart time.Time
-	var err error
-	if traceStart, err = time.Parse(time.RFC3339, h.Get("X-Trace-Start")); err != nil {
-		traceStart = now
+	// Default to now, and only parse when the header is actually present: an
+	// absent X-Trace-Start (the common first-hop case) otherwise wastes a failed
+	// time.Parse and its *ParseError allocation on every request.
+	traceStart := now
+	if ts := h.Get("X-Trace-Start"); ts != "" {
+		if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+			traceStart = parsed
+		}
 	}
 
 	if traceStart.After(now) {
@@ -138,20 +149,42 @@ func FromHeaderOrNew(h http.Header) Trace {
 	}
 
 	return Trace{
-		TraceID:       orelse(h.Get("X-Trace-ID"), newuuid),
-		RequestID:     orelse(h.Get("X-Request-ID"), newuuid),
+		// TraceID/RequestID come from untrusted headers: only echo them back if
+		// they're well-formed UUIDs, otherwise mint a fresh one. This blocks
+		// log injection and unbounded input via X-Trace-ID / X-Request-ID.
+		TraceID:       validUUIDOrNew(h.Get("X-Trace-ID")),
+		RequestID:     validUUIDOrNew(h.Get("X-Request-ID")),
 		TraceStart:    traceStart,
 		RequestStart:  now,
-		TraceSource:   h.Get("X-Trace-Source"),
-		RequestSource: h.Get("X-Request-Source"),
+		TraceSource:   sanitizeSource(h.Get("X-Trace-Source")),
+		RequestSource: sanitizeSource(h.Get("X-Request-Source")),
 	}
 }
 
-// return a if it's non-zero, otherwise call f and return its result.
-func orelse[T comparable](a T, f func() T) T {
-	var zero T
-	if a == zero {
-		return f()
+// validUUIDOrNew returns s if it parses as a UUID, otherwise a fresh UUID.
+// Used to guard the trace/request ID headers, which are attacker-controllable.
+func validUUIDOrNew(s string) string {
+	if _, err := uuid.Parse(s); err != nil {
+		return newuuid()
 	}
-	return a
+	return s
+}
+
+// sanitizeSource bounds and cleans a free-form service-name header value. It
+// drops control / non-printable runes (killing CRLF and other log-injection
+// vectors) and caps the result to maxSourceLen runes.
+func sanitizeSource(s string) string {
+	if s == "" {
+		return ""
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if utf8.RuneCountInString(cleaned) > maxSourceLen {
+		cleaned = string([]rune(cleaned)[:maxSourceLen])
+	}
+	return cleaned
 }
