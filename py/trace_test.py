@@ -1,5 +1,5 @@
 import unittest
-
+from datetime import datetime, timezone
 from trace import Trace, _resolve_id, _resolve_source, _valid_id
 
 
@@ -45,10 +45,10 @@ class TestResolveId(unittest.TestCase):
 class TestResolveSource(unittest.TestCase):
     def test_cases(self):
         cases = [
-            {"description": "empty source becomes unknown", "input": "", "expected": "unknown"},
+            {"description": "empty source stays empty", "input": "", "expected": ""},
             {"description": "valid source kept", "input": "runpod-graphql", "expected": "runpod-graphql"},
-            {"description": "poisoned source becomes unknown", "input": "svc\r\nX-Evil: 1", "expected": "unknown"},
-            {"description": "spaced source becomes unknown", "input": "not a slug", "expected": "unknown"},
+            {"description": "poisoned source dropped to empty", "input": "svc\r\nX-Evil: 1", "expected": ""},
+            {"description": "spaced source dropped to empty", "input": "not a slug", "expected": ""},
         ]
         for c in cases:
             with self.subTest(c["description"]):
@@ -72,21 +72,21 @@ class TestFromHeaders(unittest.TestCase):
                 "headers": {},
                 "want_trace": None,
                 "want_request": None,
-                "want_trace_source": "unknown",
+                "want_trace_source": "",
             },
             {
                 "description": "poisoned trace id regenerated, valid request id kept",
                 "headers": {"X-Trace-ID": "abc\r\nX-Evil: 1", "X-Request-ID": good_req},
                 "want_trace": None,
                 "want_request": good_req,
-                "want_trace_source": "unknown",
+                "want_trace_source": "",
             },
             {
-                "description": "poisoned source dropped to unknown",
+                "description": "poisoned source dropped to empty",
                 "headers": {"X-Trace-ID": good_trace, "X-Request-ID": good_req, "X-Trace-Source": "svc\r\nX-Evil"},
                 "want_trace": good_trace,
                 "want_request": good_req,
-                "want_trace_source": "unknown",
+                "want_trace_source": "",
             },
         ]
         for c in cases:
@@ -121,12 +121,44 @@ class TestSaveToHeaders(unittest.TestCase):
         self.assertNotEqual(headers["X-Request-ID"], original_request_id)
 
     def test_emits_no_unsafe_bytes_from_poisoned_trace(self):
-        t = Trace.from_headers({"X-Trace-ID": "abc\r\nX-Evil: 1", "X-Trace-Source": "svc\r\nX-Evil: 2"})
-        headers: dict[str, str] = {}
-        t.save_to_headers(headers)
-        for key, value in headers.items():
-            self.assertNotIn("\r", value, f"{key} carries CR")
-            self.assertNotIn("\n", value, f"{key} carries LF")
+        # Every inbound header poisoned, including X-Trace-Start — the timestamp is
+        # the header that previously leaked CR/LF straight through save_to_headers.
+        cases = [
+            {"description": "poisoned trace id", "header": "X-Trace-ID", "value": "abc\r\nX-Evil: 1"},
+            {"description": "poisoned trace source", "header": "X-Trace-Source", "value": "svc\r\nX-Evil: 2"},
+            {"description": "poisoned request id", "header": "X-Request-ID", "value": "req\r\nX-Evil: 3"},
+            {"description": "poisoned trace start", "header": "X-Trace-Start", "value": "2020-01-01T00:00:00Z\r\nX-Evil: 4"},
+        ]
+        for c in cases:
+            with self.subTest(c["description"]):
+                t = Trace.from_headers({c["header"]: c["value"]})
+                headers: dict[str, str] = {}
+                t.save_to_headers(headers)
+                for key, value in headers.items():
+                    self.assertNotIn("\r", value, f"{key} carries CR")
+                    self.assertNotIn("\n", value, f"{key} carries LF")
+
+    def test_malformed_trace_start_falls_back_to_now(self):
+        cases = [
+            {"description": "non-RFC3339 falls back", "value": "not-a-date"},
+            {"description": "CRLF-poisoned falls back", "value": "2020-01-01T00:00:00Z\r\nX-Evil: 1"},
+        ]
+        for c in cases:
+            with self.subTest(c["description"]):
+                t = Trace.from_headers({"X-Trace-ID": "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31", "X-Trace-Start": c["value"]})
+                # The stored value re-parses as an RFC3339 timestamp (the fallback
+                # to now), never the poisoned input.
+                self.assertNotIn("\r", t.trace_start)
+                parsed = datetime.fromisoformat(t.trace_start.replace("Z", "+00:00"))
+                delta = abs((datetime.now(timezone.utc) - parsed).total_seconds())
+                self.assertLess(delta, 5, f"trace_start {t.trace_start!r} is not ~now")
+
+    def test_valid_trace_start_is_preserved(self):
+        t = Trace.from_headers(
+            {"X-Trace-ID": "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31", "X-Trace-Start": "2020-01-01T00:00:00Z"}
+        )
+        parsed = datetime.fromisoformat(t.trace_start.replace("Z", "+00:00"))
+        self.assertEqual((parsed.year, parsed.month, parsed.day), (2020, 1, 1))
 
 
 class TestNewRegression(unittest.TestCase):

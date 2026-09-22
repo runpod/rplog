@@ -1,7 +1,6 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 from uuid7 import uuid7
 
@@ -28,7 +27,23 @@ def _resolve_id(s: str) -> str:
 
 
 def _resolve_source(s: str) -> str:
-    return s if _valid_id(s) else "unknown"
+    # Match Go's resolveSource: keep a valid source, drop anything else (including
+    # empty) to "" so save_to_headers can never re-emit unsafe bytes.
+    return s if _valid_id(s) else ""
+
+
+def _resolve_start(s: str, now: datetime) -> str:
+    # Parse an inbound RFC3339 timestamp and re-emit it canonically, falling back
+    # to `now` when the header is absent or malformed. Re-formatting through
+    # as_rfc3339 means the stored value can never carry CR/LF (or any other
+    # injected bytes) into save_to_headers — the emit-side guard that mirrors Go's
+    # time.Parse of X-Trace-Start.
+    if s:
+        try:
+            return as_rfc3339(datetime.fromisoformat(s.replace("Z", "+00:00")))
+        except ValueError:
+            pass
+    return as_rfc3339(now)
 
 
 @dataclass
@@ -49,19 +64,22 @@ class Trace:
         this will over-write the global trace.
 
         Inbound header values are untrusted: an absent or malformed X-Trace-ID /
-        X-Request-ID is replaced with a fresh uuid, and a malformed source is
-        dropped to "unknown" (see _valid_id).
+        X-Request-ID is replaced with a fresh uuid, a malformed source is dropped
+        to "", and a malformed X-Trace-Start falls back to now (see _valid_id /
+        _resolve_start). There is no X-Request-Start header — the request timing
+        starts when the server receives the request, matching Go's SaveToHeader.
         """
         global _trace
-        now = as_rfc3339(datetime.now())
+        now_dt = datetime.now(timezone.utc)
+        now = as_rfc3339(now_dt)
 
         t = Trace(
             request_id=_resolve_id(headers.get("X-Request-ID", "")),
             request_source=_resolve_source(headers.get("X-Request-Source", "")),
-            request_start=headers.get("X-Request-Start") or now,
+            request_start=now,
             trace_id=_resolve_id(headers.get("X-Trace-ID", "")),
             trace_source=_resolve_source(headers.get("X-Trace-Source", "")),
-            trace_start=headers.get("X-Trace-Start") or now,
+            trace_start=_resolve_start(headers.get("X-Trace-Start", ""), now_dt),
         )
         _trace = t
         return t
@@ -80,9 +98,9 @@ class Trace:
         return _trace
 
     @staticmethod
-    def new():
+    def new() -> "Trace":
         """start a fresh trace and return it, overwriting the global trace if it exists."""
-        now = as_rfc3339(datetime.now())
+        now = as_rfc3339(datetime.now(timezone.utc))
         global _trace
         t = Trace(
             request_id=uuid7(),
@@ -101,6 +119,10 @@ class Trace:
         Writes the same five headers as the Go trace.SaveToHeader, and mints a fresh
         X-Request-ID: this is a new request within the same trace, so the trace_id
         persists across the hop while the request_id identifies this sub-request.
+
+        Every stored field is already validated at construction (ids charset-checked,
+        source dropped to "" if invalid, trace_start re-formatted through as_rfc3339),
+        so no value written here can carry CR/LF into an outbound header.
         """
         headers["X-Trace-ID"] = self.trace_id
         headers["X-Request-ID"] = uuid7()
@@ -110,4 +132,4 @@ class Trace:
 
 
 """the current trace, if any. this is only valid in a truly single-threaded environment."""
-_trace: Optional[Trace] = None
+_trace: "Trace | None" = None

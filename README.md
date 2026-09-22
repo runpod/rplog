@@ -78,12 +78,12 @@ The trace crosses service boundaries as HTTP headers:
 | Header | Meaning | Required for interop |
 |--------|---------|----------------------|
 | `X-Trace-ID` | stable id for the whole trace | yes |
-| `X-Request-ID` | fresh id per request/sub-request | yes |
+| `X-Request-ID` | id for a single request; a fresh one is minted per outbound sub-request | yes |
 | `X-Trace-Start` | RFC3339 timestamp of trace origin | no (metadata) |
 | `X-Trace-Source` | service that originated the trace | no (metadata) |
 | `X-Request-Source` | service that originated this request | no (metadata) |
 
-Only the first two are required; the rest are metadata. Every hop applies **propagate-or-generate**: reuse a valid inbound `X-Trace-ID`, otherwise mint one. One `trace_id` spans the whole trace; a fresh `request_id` is minted per sub-request.
+Only the first two are required; the rest are metadata. Every hop applies **propagate-or-generate** to both required ids: reuse the valid inbound value, otherwise mint one. One `trace_id` spans the whole trace. A fresh `request_id` is minted per **outbound** sub-request (`ClientMiddleware`); an inbound edge honors a valid caller-supplied `X-Request-ID` (so a caller that already tagged its request keeps that id through the hop), and mints one only when it is absent or invalid.
 
 ### Go usage (`trace` package)
 - **Inbound:** `trc := trace.FromHeaderOrNew(r.Header)` then `ctx = trace.CtxWith(ctx, trc)` (or use `trace.ServerMiddleware`). Store the `Trace` on the request context so downstream code and logs pick it up.

@@ -8,14 +8,22 @@ import (
 	"time"
 )
 
+// Shared fixtures, hoisted so the sample ids and source aren't repeated literals
+// across the tables (keeps goconst quiet and the intent obvious).
+const (
+	sampleTraceID   = "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31"
+	sampleRequestID = "018f3a1c-2b4d-7e8f-9a0b-1c2d3e4f5061"
+	sampleSource    = "runpod-graphql"
+)
+
 func TestValidID(t *testing.T) {
 	tests := []struct {
 		description string
 		input       string
 		expected    bool
 	}{
-		{description: "canonical uuid v4", input: "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31", expected: true},
-		{description: "uuid v7 style", input: "018f3a1c-2b4d-7e8f-9a0b-1c2d3e4f5061", expected: true},
+		{description: "canonical uuid v4", input: sampleTraceID, expected: true},
+		{description: "uuid v7 style", input: sampleRequestID, expected: true},
 		{description: "service-prefixed id with underscore", input: "trace_018f3a1c2b4d7e8f", expected: true},
 		{description: "dotted id", input: "svc.abc.123", expected: true},
 		{description: "all allowed classes", input: "AZaz09-_.", expected: true},
@@ -45,7 +53,7 @@ func TestResolveID(t *testing.T) {
 		input         string
 		wantPropagate bool // true: returned verbatim; false: freshly generated
 	}{
-		{description: "valid id is propagated verbatim", input: "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31", wantPropagate: true},
+		{description: "valid id is propagated verbatim", input: sampleTraceID, wantPropagate: true},
 		{description: "absent id is generated", input: "", wantPropagate: false},
 		{description: "oversized id is regenerated", input: strings.Repeat("a", maxIDLen+1), wantPropagate: false},
 		{description: "CRLF id is regenerated", input: "abc\r\nInjected: 1", wantPropagate: false},
@@ -76,8 +84,8 @@ func TestResolveSource(t *testing.T) {
 		input       string
 		expected    string
 	}{
-		{description: "empty source is kept as unknown", input: "", expected: ""},
-		{description: "valid service name is kept", input: "runpod-graphql", expected: "runpod-graphql"},
+		{description: "empty source stays empty", input: "", expected: ""},
+		{description: "valid service name is kept", input: sampleSource, expected: sampleSource},
 		{description: "CRLF source is dropped to empty", input: "svc\r\nX-Evil: 1", expected: ""},
 		{description: "spaced source is dropped to empty", input: "not a slug", expected: ""},
 	}
@@ -91,8 +99,8 @@ func TestResolveSource(t *testing.T) {
 }
 
 func TestFromHeaderOrNew(t *testing.T) {
-	const goodTrace = "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31"
-	const goodReq = "018f3a1c-2b4d-7e8f-9a0b-1c2d3e4f5061"
+	const goodTrace = sampleTraceID
+	const goodReq = sampleRequestID
 
 	tests := []struct {
 		description       string
@@ -104,7 +112,7 @@ func TestFromHeaderOrNew(t *testing.T) {
 	}{
 		{
 			description:       "all ids present and valid are propagated",
-			headers:           map[string]string{"X-Trace-ID": goodTrace, "X-Request-ID": goodReq, "X-Trace-Source": "main-ui", "X-Request-Source": "hapi"},
+			headers:           map[string]string{headerTraceID: goodTrace, headerRequestID: goodReq, headerTraceSource: "main-ui", headerRequestSource: "hapi"},
 			wantTraceID:       goodTrace,
 			wantRequestID:     goodReq,
 			wantTraceSource:   "main-ui",
@@ -118,13 +126,13 @@ func TestFromHeaderOrNew(t *testing.T) {
 		},
 		{
 			description:   "poisoned trace id is regenerated, valid request id kept",
-			headers:       map[string]string{"X-Trace-ID": "abc\r\nX-Evil: 1", "X-Request-ID": goodReq},
+			headers:       map[string]string{headerTraceID: "abc\r\nX-Evil: 1", headerRequestID: goodReq},
 			wantTraceID:   "",
 			wantRequestID: goodReq,
 		},
 		{
 			description:     "poisoned source is dropped to empty",
-			headers:         map[string]string{"X-Trace-ID": goodTrace, "X-Request-ID": goodReq, "X-Trace-Source": "svc\r\nX-Evil: 1"},
+			headers:         map[string]string{headerTraceID: goodTrace, headerRequestID: goodReq, headerTraceSource: "svc\r\nX-Evil: 1"},
 			wantTraceID:     goodTrace,
 			wantRequestID:   goodReq,
 			wantTraceSource: "",
@@ -152,8 +160,8 @@ func TestFromHeaderOrNew(t *testing.T) {
 					t.Errorf("%s = %q, want %q", name, actual, want)
 				}
 			}
-			assertID("X-Trace-ID", tt.wantTraceID, got.TraceID)
-			assertID("X-Request-ID", tt.wantRequestID, got.RequestID)
+			assertID(headerTraceID, tt.wantTraceID, got.TraceID)
+			assertID(headerRequestID, tt.wantRequestID, got.RequestID)
 			if got.TraceSource != tt.wantTraceSource {
 				t.Errorf("TraceSource = %q, want %q", got.TraceSource, tt.wantTraceSource)
 			}
@@ -201,7 +209,7 @@ func TestFromHeaderOrNewTraceStart(t *testing.T) {
 		t.Run(tt.description, func(t *testing.T) {
 			h := http.Header{}
 			if tt.header != "" {
-				h.Set("X-Trace-Start", tt.header)
+				h.Set(headerTraceStart, tt.header)
 			}
 			got := FromHeaderOrNew(h)
 			if !tt.expected(got.TraceStart) {
@@ -213,10 +221,10 @@ func TestFromHeaderOrNewTraceStart(t *testing.T) {
 
 func TestSaveToHeaderRoundTrip(t *testing.T) {
 	orig := Trace{
-		TraceID:       "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31",
-		RequestID:     "018f3a1c-2b4d-7e8f-9a0b-1c2d3e4f5061",
-		TraceSource:   "runpod-graphql",
-		RequestSource: "runpod-graphql",
+		TraceID:       sampleTraceID,
+		RequestID:     sampleRequestID,
+		TraceSource:   sampleSource,
+		RequestSource: sampleSource,
 		TraceStart:    time.Now().UTC().Truncate(time.Second),
 	}
 	h := http.Header{}
@@ -239,9 +247,9 @@ func TestSaveToHeaderEmitsNoUnsafeBytes(t *testing.T) {
 	// other control bytes) through SaveToHeader — otherwise the outbound request
 	// fails or smuggles a header downstream.
 	poisoned := http.Header{}
-	poisoned.Set("X-Trace-ID", "abc\r\nX-Evil: 1")
-	poisoned.Set("X-Request-ID", "req\r\nX-Evil: 2")
-	poisoned.Set("X-Trace-Source", "svc\r\nX-Evil: 3")
+	poisoned.Set(headerTraceID, "abc\r\nX-Evil: 1")
+	poisoned.Set(headerRequestID, "req\r\nX-Evil: 2")
+	poisoned.Set(headerTraceSource, "svc\r\nX-Evil: 3")
 	trc := FromHeaderOrNew(poisoned)
 
 	out := http.Header{}
@@ -270,13 +278,15 @@ func TestClientMiddleware(t *testing.T) {
 
 		req, _ := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
 		req = req.WithContext(CtxWith(req.Context(), parent))
-		if _, err := rt.RoundTrip(req); err != nil {
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
 			t.Fatalf("RoundTrip: %v", err)
 		}
-		if got := cap.req.Header.Get("X-Trace-ID"); got != "trace-abc" {
+		resp.Body.Close()
+		if got := cap.req.Header.Get(headerTraceID); got != "trace-abc" {
 			t.Errorf("X-Trace-ID = %q, want the parent trace id", got)
 		}
-		if got := cap.req.Header.Get("X-Request-ID"); got == "" || got == "req-parent" {
+		if got := cap.req.Header.Get(headerRequestID); got == "" || got == "req-parent" {
 			t.Errorf("X-Request-ID = %q, want a fresh sub-request id", got)
 		}
 	})
@@ -285,10 +295,12 @@ func TestClientMiddleware(t *testing.T) {
 		cap := &capturingRT{}
 		rt := ClientMiddleware(cap)
 		req, _ := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
-		if _, err := rt.RoundTrip(req); err != nil {
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
 			t.Fatalf("RoundTrip: %v", err)
 		}
-		if got := cap.req.Header.Get("X-Trace-ID"); !validID(got) {
+		resp.Body.Close()
+		if got := cap.req.Header.Get(headerTraceID); !validID(got) {
 			t.Errorf("X-Trace-ID = %q, want a generated valid id", got)
 		}
 	})
@@ -301,7 +313,7 @@ func TestServerMiddlewarePutsTraceInContext(t *testing.T) {
 		seen, ok = FromCtx(r.Context())
 	}))
 	req, _ := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
-	req.Header.Set("X-Trace-ID", "trace-from-header")
+	req.Header.Set(headerTraceID, "trace-from-header")
 	h.ServeHTTP(nil, req)
 	if !ok {
 		t.Fatal("expected a Trace in the request context")
@@ -329,7 +341,7 @@ func TestNewGeneratesUniqueIDs(t *testing.T) {
 }
 
 func TestValidIDIsAllocationFree(t *testing.T) {
-	input := "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31"
+	input := sampleTraceID
 	if allocs := testing.AllocsPerRun(1000, func() { _ = validID(input) }); allocs != 0 {
 		t.Errorf("validID allocated %v times per run, want 0", allocs)
 	}
@@ -337,11 +349,11 @@ func TestValidIDIsAllocationFree(t *testing.T) {
 
 func BenchmarkFromHeaderOrNew(b *testing.B) {
 	valid := http.Header{}
-	valid.Set("X-Trace-ID", "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31")
-	valid.Set("X-Request-ID", "018f3a1c-2b4d-7e8f-9a0b-1c2d3e4f5061")
+	valid.Set(headerTraceID, sampleTraceID)
+	valid.Set(headerRequestID, sampleRequestID)
 
 	invalid := http.Header{}
-	invalid.Set("X-Trace-ID", "abc\r\nX-Evil: 1")
+	invalid.Set(headerTraceID, "abc\r\nX-Evil: 1")
 
 	absent := http.Header{}
 
@@ -357,7 +369,7 @@ func BenchmarkFromHeaderOrNew(b *testing.B) {
 }
 
 func BenchmarkValidID(b *testing.B) {
-	input := "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31"
+	input := sampleTraceID
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = validID(input)
@@ -393,6 +405,7 @@ func BenchmarkClientMiddlewareRoundTrip(b *testing.B) {
 	req = req.WithContext(CtxWith(context.Background(), New()))
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = rt.RoundTrip(req)
+		resp, _ := rt.RoundTrip(req)
+		resp.Body.Close()
 	}
 }

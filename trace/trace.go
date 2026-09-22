@@ -102,15 +102,25 @@ func FromCtxOrNew(ctx context.Context) Trace {
 	return t
 }
 
+// Trace headers carried across service boundaries. Only X-Trace-ID and
+// X-Request-ID are required for interop; the rest are metadata.
+const (
+	headerTraceID       = "X-Trace-ID"
+	headerRequestID     = "X-Request-ID"
+	headerTraceStart    = "X-Trace-Start"
+	headerTraceSource   = "X-Trace-Source"
+	headerRequestSource = "X-Request-Source"
+)
+
 // Save a Trace into the given header, over-writing the X-Trace-ID, X-Request-ID, and X-Trace-Start headers.
 // Note that there is no RequestStart header: the request timing starts when the server receives the request.
 // This is in contrast to the TraceStart header, which is the time the trace was created and persists across service boundaries.
 func SaveToHeader(h http.Header, t Trace) {
-	h.Set("X-Trace-ID", t.TraceID)
-	h.Set("X-Request-ID", t.RequestID)
-	h.Set("X-Trace-Start", t.TraceStart.Format(time.RFC3339))
-	h.Set("X-Trace-Source", t.TraceSource)
-	h.Set("X-Request-Source", t.RequestSource)
+	h.Set(headerTraceID, t.TraceID)
+	h.Set(headerRequestID, t.RequestID)
+	h.Set(headerTraceStart, t.TraceStart.Format(time.RFC3339))
+	h.Set(headerTraceSource, t.TraceSource)
+	h.Set(headerRequestSource, t.RequestSource)
 }
 
 // uuid generates a new UUID, preferring V7 over V4, but falling back to V4 if V7 is not available.
@@ -134,7 +144,7 @@ func FromHeaderOrNew(h http.Header) Trace {
 	now := time.Now().UTC()
 
 	traceStart := now
-	if raw := h.Get("X-Trace-Start"); raw != "" {
+	if raw := h.Get(headerTraceStart); raw != "" {
 		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
 			traceStart = parsed
 		}
@@ -146,12 +156,12 @@ func FromHeaderOrNew(h http.Header) Trace {
 	}
 
 	return Trace{
-		TraceID:       resolveID(h.Get("X-Trace-ID")),
-		RequestID:     resolveID(h.Get("X-Request-ID")),
+		TraceID:       resolveID(h.Get(headerTraceID)),
+		RequestID:     resolveID(h.Get(headerRequestID)),
 		TraceStart:    traceStart,
 		RequestStart:  now,
-		TraceSource:   resolveSource(h.Get("X-Trace-Source")),
-		RequestSource: resolveSource(h.Get("X-Request-Source")),
+		TraceSource:   resolveSource(h.Get(headerTraceSource)),
+		RequestSource: resolveSource(h.Get(headerRequestSource)),
 	}
 }
 
