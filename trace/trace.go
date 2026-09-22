@@ -2,7 +2,6 @@ package trace
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -143,16 +142,16 @@ func newuuid() string {
 func FromHeaderOrNew(h http.Header) Trace {
 	now := time.Now().UTC()
 
+	// X-Trace-Start is caller-controlled and untrusted. Parse it, but fall back to
+	// now for absent, malformed, or future values. A future timestamp is clamped
+	// silently, exactly like a malformed one, rather than logged: warning per
+	// request would let a caller drive this service's log volume by choosing the
+	// header value.
 	traceStart := now
 	if raw := h.Get(headerTraceStart); raw != "" {
-		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil && !parsed.After(now) {
 			traceStart = parsed
 		}
-	}
-
-	if traceStart.After(now) {
-		slog.Warn("trace start is in the future", slog.Time("trace_start", traceStart), slog.Time("now", now))
-		traceStart = now
 	}
 
 	return Trace{

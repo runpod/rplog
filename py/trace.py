@@ -34,13 +34,18 @@ def _resolve_source(s: str) -> str:
 
 def _resolve_start(s: str, now: datetime) -> str:
     # Parse an inbound RFC3339 timestamp and re-emit it canonically, falling back
-    # to `now` when the header is absent or malformed. Re-formatting through
-    # as_rfc3339 means the stored value can never carry CR/LF (or any other
-    # injected bytes) into save_to_headers — the emit-side guard that mirrors Go's
-    # time.Parse of X-Trace-Start.
+    # to `now` when the header is absent, malformed, or in the future. Clamping a
+    # future value to now silently (like a malformed one) mirrors Go's
+    # FromHeaderOrNew and stops a caller from choosing the trace's start time.
+    # Re-formatting through as_rfc3339 also means the stored value can never carry
+    # CR/LF (or any other injected bytes) into save_to_headers.
     if s:
         try:
-            return as_rfc3339(datetime.fromisoformat(s.replace("Z", "+00:00")))
+            parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if parsed <= now:
+                return as_rfc3339(parsed)
         except ValueError:
             pass
     return as_rfc3339(now)

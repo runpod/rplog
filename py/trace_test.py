@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from trace import Trace, _resolve_id, _resolve_source, _valid_id
 
 
@@ -159,6 +159,17 @@ class TestSaveToHeaders(unittest.TestCase):
         )
         parsed = datetime.fromisoformat(t.trace_start.replace("Z", "+00:00"))
         self.assertEqual((parsed.year, parsed.month, parsed.day), (2020, 1, 1))
+
+    def test_future_trace_start_is_clamped_to_now(self):
+        # A caller-supplied future timestamp is clamped to now (matching Go), so it
+        # never drives the trace's start time.
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        t = Trace.from_headers(
+            {"X-Trace-ID": "5f9c2e6a-1b3d-4c8e-9a0f-2b7c6d5e4f31", "X-Trace-Start": future}
+        )
+        parsed = datetime.fromisoformat(t.trace_start.replace("Z", "+00:00"))
+        delta = abs((datetime.now(timezone.utc) - parsed).total_seconds())
+        self.assertLess(delta, 5, f"future trace_start {t.trace_start!r} was not clamped to now")
 
 
 class TestNewRegression(unittest.TestCase):
