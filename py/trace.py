@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -7,6 +8,27 @@ from uuid7 import uuid7
 
 def as_rfc3339(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
+
+
+# An inbound id may be at most _MAX_ID_LEN chars and contain only [A-Za-z0-9._-].
+# Anything else (empty, over-long, or carrying CR/LF, control, or non-ascii bytes)
+# is untrusted: an id is regenerated and a source is dropped, so a poisoned inbound
+# header can never be re-emitted by save_to_headers to corrupt a downstream request
+# or a log line. Mirrors validID in the Go trace package.
+_MAX_ID_LEN = 200
+_VALID_ID = re.compile(r"\A[A-Za-z0-9._-]+\Z")
+
+
+def _valid_id(s: str) -> bool:
+    return bool(s) and len(s) <= _MAX_ID_LEN and _VALID_ID.match(s) is not None
+
+
+def _resolve_id(s: str) -> str:
+    return s if _valid_id(s) else uuid7()
+
+
+def _resolve_source(s: str) -> str:
+    return s if _valid_id(s) else "unknown"
 
 
 @dataclass
@@ -25,17 +47,21 @@ class Trace:
     def from_headers(headers: dict[str, str]) -> "Trace":
         """get a trace from a dictionary of headers, or create a new one if it doesn't exist.
         this will over-write the global trace.
+
+        Inbound header values are untrusted: an absent or malformed X-Trace-ID /
+        X-Request-ID is replaced with a fresh uuid, and a malformed source is
+        dropped to "unknown" (see _valid_id).
         """
         global _trace
         now = as_rfc3339(datetime.now())
 
         t = Trace(
-            request_id=headers.get("X-Request-ID", uuid7()),
-            request_source=headers.get("X-Request-Source", "unknown"),
-            request_start=headers.get("X-Request-Start", now),
-            trace_id=headers.get("X-Trace-ID", uuid7()),
-            trace_source=headers.get("X-Trace-Source", "unknown"),
-            trace_start=headers.get("X-Trace-Start", now),
+            request_id=_resolve_id(headers.get("X-Request-ID", "")),
+            request_source=_resolve_source(headers.get("X-Request-Source", "")),
+            request_start=headers.get("X-Request-Start") or now,
+            trace_id=_resolve_id(headers.get("X-Trace-ID", "")),
+            trace_source=_resolve_source(headers.get("X-Trace-Source", "")),
+            trace_start=headers.get("X-Trace-Start") or now,
         )
         _trace = t
         return t
@@ -56,7 +82,7 @@ class Trace:
     @staticmethod
     def new():
         """start a fresh trace and return it, overwriting the global trace if it exists."""
-        now = as_rfc3339(datetime.datetime.now())
+        now = as_rfc3339(datetime.now())
         global _trace
         t = Trace(
             request_id=uuid7(),
@@ -71,12 +97,16 @@ class Trace:
 
     def save_to_headers(self, headers: dict[str, str]) -> None:
         """save the trace to a dictionary of headers in preparation for an HTTP request.
-        This creates a new request_id and sets the request_start time to now so that the next service in the chain can add its own trace information.
+
+        Writes the same five headers as the Go trace.SaveToHeader, and mints a fresh
+        X-Request-ID: this is a new request within the same trace, so the trace_id
+        persists across the hop while the request_id identifies this sub-request.
         """
-        headers["X-Request-ID"] = uuid7(),
-        headers["X-Request-Source"] = self.request_source
-        headers["X-Request-Start"] = as_rfc3339(datetime.now())
         headers["X-Trace-ID"] = self.trace_id
+        headers["X-Request-ID"] = uuid7()
+        headers["X-Trace-Start"] = self.trace_start
+        headers["X-Trace-Source"] = self.trace_source
+        headers["X-Request-Source"] = self.request_source
 
 
 """the current trace, if any. this is only valid in a truly single-threaded environment."""

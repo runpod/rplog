@@ -123,13 +123,21 @@ func newuuid() string {
 }
 
 // FromHeaderOrNew returns a Trace from the given header, if it exists, and creates a new one if it doesn't.
+//
+// Inbound header values are untrusted. A TraceID/RequestID that is empty, over
+// maxIDLen, or carries bytes outside [A-Za-z0-9._-] is replaced with a fresh
+// uuid, and an out-of-charset TraceSource/RequestSource is dropped to "". This
+// keeps every value SaveToHeader later re-emits safe to write into an HTTP
+// header: a CR/LF-bearing id would otherwise make the outbound request (or the
+// response echo) fail, or smuggle a header into a lenient downstream.
 func FromHeaderOrNew(h http.Header) Trace {
 	now := time.Now().UTC()
 
-	var traceStart time.Time
-	var err error
-	if traceStart, err = time.Parse(time.RFC3339, h.Get("X-Trace-Start")); err != nil {
-		traceStart = now
+	traceStart := now
+	if raw := h.Get("X-Trace-Start"); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			traceStart = parsed
+		}
 	}
 
 	if traceStart.After(now) {
@@ -138,20 +146,53 @@ func FromHeaderOrNew(h http.Header) Trace {
 	}
 
 	return Trace{
-		TraceID:       orelse(h.Get("X-Trace-ID"), newuuid),
-		RequestID:     orelse(h.Get("X-Request-ID"), newuuid),
+		TraceID:       resolveID(h.Get("X-Trace-ID")),
+		RequestID:     resolveID(h.Get("X-Request-ID")),
 		TraceStart:    traceStart,
 		RequestStart:  now,
-		TraceSource:   h.Get("X-Trace-Source"),
-		RequestSource: h.Get("X-Request-Source"),
+		TraceSource:   resolveSource(h.Get("X-Trace-Source")),
+		RequestSource: resolveSource(h.Get("X-Request-Source")),
 	}
 }
 
-// return a if it's non-zero, otherwise call f and return its result.
-func orelse[T comparable](a T, f func() T) T {
-	var zero T
-	if a == zero {
-		return f()
+// maxIDLen caps how long an inbound trace/request id may be before we treat it
+// as untrustworthy and mint a fresh one.
+const maxIDLen = 200
+
+// validID reports whether s is safe to accept verbatim from an untrusted
+// inbound header: non-empty, within maxIDLen, and limited to characters that
+// cannot corrupt a log line or an HTTP header value (no CR/LF, control bytes,
+// spaces, or non-ASCII). The scan indexes bytes and allocates nothing.
+func validID(s string) bool {
+	if s == "" || len(s) > maxIDLen {
+		return false
 	}
-	return a
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// resolveID returns id when it passes validID, otherwise a fresh uuid.
+func resolveID(id string) string {
+	if validID(id) {
+		return id
+	}
+	return newuuid()
+}
+
+// resolveSource returns src unchanged when empty (the "unknown" case) or when
+// it passes validID, and drops any other value to "" so SaveToHeader can never
+// re-emit unsafe bytes.
+func resolveSource(src string) string {
+	if src == "" || validID(src) {
+		return src
+	}
+	return ""
 }
