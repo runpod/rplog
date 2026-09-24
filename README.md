@@ -72,4 +72,25 @@ All timestamps should be RFC3339 in UTC, a subset of ISO8601. For example: `2020
 ## Tracing
 Traces consist of a `request_id`, a `trace_id`, and the `trace_start` timestamp. A `trace_id` should begin when an "event" starts in our system (i.e, a customer request comes in, a cron job starts, etc) and travels across services. A `request_id` is a unique identifier for a single request: i.e, within the bounds of a single service. A trace may outlive a request, but a request will always be part of a trace.
 
+### HTTP header contract
+The trace crosses service boundaries as HTTP headers:
+
+| Header | Meaning | Required for interop |
+|--------|---------|----------------------|
+| `X-Trace-ID` | stable id for the whole trace | yes |
+| `X-Request-ID` | id for a single request; a fresh one is minted per outbound sub-request | yes |
+| `X-Trace-Start` | RFC3339 timestamp of trace origin | no (metadata) |
+| `X-Trace-Source` | service that originated the trace | no (metadata) |
+| `X-Request-Source` | service that originated this request | no (metadata) |
+
+Only the first two are required; the rest are metadata. Every hop applies **propagate-or-generate** to both required ids: reuse the valid inbound value, otherwise mint one. One `trace_id` spans the whole trace. A fresh `request_id` is minted per **outbound** sub-request (`ClientMiddleware`); an inbound edge honors a valid caller-supplied `X-Request-ID` (so a caller that already tagged its request keeps that id through the hop), and mints one only when it is absent or invalid.
+
+### Go usage (`trace` package)
+- **Inbound:** `trc := trace.FromHeaderOrNew(r.Header)` then `ctx = trace.CtxWith(ctx, trc)` (or use `trace.ServerMiddleware`). Store the `Trace` on the request context so downstream code and logs pick it up.
+- **Outbound:** wrap your client transport with `trace.ClientMiddleware(transport)`. It reads the `Trace` off the request context, preserves the `TraceID`, and mints a fresh `RequestID` per call.
+- **Response echo:** `trace.SaveToHeader(w.Header(), trc)` so the caller (and a browser, via CORS `Access-Control-Expose-Headers`) can read the id back. Set it *before* you start streaming a response — SSE handlers flush headers early.
+
+### Inbound validation
+`FromHeaderOrNew` treats inbound header values as untrusted input. An `X-Trace-ID` / `X-Request-ID` that is empty, longer than 200 bytes, or contains any byte outside `[A-Za-z0-9._-]` (e.g. CR/LF, control bytes, spaces) is rejected and a fresh id is generated in its place — preventing header/log injection (CWE-93). The `X-Trace-Source` / `X-Request-Source` metadata values are validated the same way and dropped (blanked) rather than regenerated when invalid. The Python port (`py/trace.py`) applies the identical length cap and charset. This means a value that survives validation in one service is accepted unchanged by the next.
+
 

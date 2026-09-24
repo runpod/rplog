@@ -2,7 +2,6 @@ package trace
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -102,15 +101,25 @@ func FromCtxOrNew(ctx context.Context) Trace {
 	return t
 }
 
+// Trace headers carried across service boundaries. Only X-Trace-ID and
+// X-Request-ID are required for interop; the rest are metadata.
+const (
+	headerTraceID       = "X-Trace-ID"
+	headerRequestID     = "X-Request-ID"
+	headerTraceStart    = "X-Trace-Start"
+	headerTraceSource   = "X-Trace-Source"
+	headerRequestSource = "X-Request-Source"
+)
+
 // Save a Trace into the given header, over-writing the X-Trace-ID, X-Request-ID, and X-Trace-Start headers.
 // Note that there is no RequestStart header: the request timing starts when the server receives the request.
 // This is in contrast to the TraceStart header, which is the time the trace was created and persists across service boundaries.
 func SaveToHeader(h http.Header, t Trace) {
-	h.Set("X-Trace-ID", t.TraceID)
-	h.Set("X-Request-ID", t.RequestID)
-	h.Set("X-Trace-Start", t.TraceStart.Format(time.RFC3339))
-	h.Set("X-Trace-Source", t.TraceSource)
-	h.Set("X-Request-Source", t.RequestSource)
+	h.Set(headerTraceID, t.TraceID)
+	h.Set(headerRequestID, t.RequestID)
+	h.Set(headerTraceStart, t.TraceStart.Format(time.RFC3339))
+	h.Set(headerTraceSource, t.TraceSource)
+	h.Set(headerRequestSource, t.RequestSource)
 }
 
 // uuid generates a new UUID, preferring V7 over V4, but falling back to V4 if V7 is not available.
@@ -123,35 +132,89 @@ func newuuid() string {
 }
 
 // FromHeaderOrNew returns a Trace from the given header, if it exists, and creates a new one if it doesn't.
+//
+// Inbound header values are untrusted. A TraceID/RequestID that is empty, over
+// maxIDLen, or carries bytes outside [A-Za-z0-9._-] is replaced with a fresh
+// uuid, and an out-of-charset TraceSource/RequestSource is dropped to "". This
+// keeps every value SaveToHeader later re-emits safe to write into an HTTP
+// header: a CR/LF-bearing id would otherwise make the outbound request (or the
+// response echo) fail, or smuggle a header into a lenient downstream.
 func FromHeaderOrNew(h http.Header) Trace {
 	now := time.Now().UTC()
 
-	var traceStart time.Time
-	var err error
-	if traceStart, err = time.Parse(time.RFC3339, h.Get("X-Trace-Start")); err != nil {
-		traceStart = now
-	}
-
-	if traceStart.After(now) {
-		slog.Warn("trace start is in the future", slog.Time("trace_start", traceStart), slog.Time("now", now))
-		traceStart = now
+	// X-Trace-Start is caller-controlled and untrusted. Parse it, but fall back to
+	// now for absent, malformed, or future values. A future timestamp is clamped
+	// silently, exactly like a malformed one, rather than logged: warning per
+	// request would let a caller drive this service's log volume by choosing the
+	// header value.
+	traceStart := now
+	if raw := h.Get(headerTraceStart); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil && !parsed.After(now) {
+			traceStart = parsed
+		}
 	}
 
 	return Trace{
-		TraceID:       orelse(h.Get("X-Trace-ID"), newuuid),
-		RequestID:     orelse(h.Get("X-Request-ID"), newuuid),
+		TraceID:       resolveID(h.Get(headerTraceID)),
+		RequestID:     resolveID(h.Get(headerRequestID)),
 		TraceStart:    traceStart,
 		RequestStart:  now,
-		TraceSource:   h.Get("X-Trace-Source"),
-		RequestSource: h.Get("X-Request-Source"),
+		TraceSource:   resolveSource(h.Get(headerTraceSource)),
+		RequestSource: resolveSource(h.Get(headerRequestSource)),
 	}
 }
 
-// return a if it's non-zero, otherwise call f and return its result.
-func orelse[T comparable](a T, f func() T) T {
-	var zero T
-	if a == zero {
-		return f()
+// maxIDLen caps how long an inbound trace/request id may be before we treat it
+// as untrustworthy and mint a fresh one.
+const maxIDLen = 200
+
+// maxSourceLen caps an inbound X-Trace-Source / X-Request-Source. A source is a
+// service name (e.g. "runpod-graphql"), not an id, so it is bounded far tighter
+// than maxIDLen: there is no legitimate reason to accept a 200-byte source, and
+// the value is logged verbatim.
+const maxSourceLen = 64
+
+// validID reports whether s is safe to accept verbatim from an untrusted
+// inbound header: non-empty, within maxIDLen, and limited to characters that
+// cannot corrupt a log line or an HTTP header value (no CR/LF, control bytes,
+// spaces, or non-ASCII). The scan indexes bytes and allocates nothing.
+func validID(s string) bool {
+	if s == "" || len(s) > maxIDLen {
+		return false
 	}
-	return a
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// resolveID returns id when it passes validID, otherwise a fresh uuid.
+func resolveID(id string) string {
+	if validID(id) {
+		return id
+	}
+	return newuuid()
+}
+
+// validSource reports whether an inbound source header is safe to keep: empty
+// (the unset / "unknown" case) or a charset-valid slug no longer than
+// maxSourceLen. It is tighter than validID because a source is a service name,
+// not an id.
+func validSource(s string) bool {
+	return s == "" || (len(s) <= maxSourceLen && validID(s))
+}
+
+// resolveSource returns src unchanged when it passes validSource, and drops any
+// other value to "" so SaveToHeader can never re-emit unsafe or oversized bytes.
+func resolveSource(src string) string {
+	if validSource(src) {
+		return src
+	}
+	return ""
 }
