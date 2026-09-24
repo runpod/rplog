@@ -86,8 +86,11 @@ func TestResolveSource(t *testing.T) {
 	}{
 		{description: "empty source stays empty", input: "", expected: ""},
 		{description: "valid service name is kept", input: sampleSource, expected: sampleSource},
+		{description: "source at maxSourceLen is kept", input: strings.Repeat("a", maxSourceLen), expected: strings.Repeat("a", maxSourceLen)},
 		{description: "CRLF source is dropped to empty", input: "svc\r\nX-Evil: 1", expected: ""},
 		{description: "spaced source is dropped to empty", input: "not a slug", expected: ""},
+		{description: "over-length source is dropped to empty", input: strings.Repeat("a", maxSourceLen+1), expected: ""},
+		{description: "charset-valid but over-length source is dropped", input: strings.Repeat("a", maxIDLen), expected: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {

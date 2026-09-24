@@ -168,6 +168,12 @@ func FromHeaderOrNew(h http.Header) Trace {
 // as untrustworthy and mint a fresh one.
 const maxIDLen = 200
 
+// maxSourceLen caps an inbound X-Trace-Source / X-Request-Source. A source is a
+// service name (e.g. "runpod-graphql"), not an id, so it is bounded far tighter
+// than maxIDLen: there is no legitimate reason to accept a 200-byte source, and
+// the value is logged verbatim.
+const maxSourceLen = 64
+
 // validID reports whether s is safe to accept verbatim from an untrusted
 // inbound header: non-empty, within maxIDLen, and limited to characters that
 // cannot corrupt a log line or an HTTP header value (no CR/LF, control bytes,
@@ -196,11 +202,18 @@ func resolveID(id string) string {
 	return newuuid()
 }
 
-// resolveSource returns src unchanged when empty (the "unknown" case) or when
-// it passes validID, and drops any other value to "" so SaveToHeader can never
-// re-emit unsafe bytes.
+// validSource reports whether an inbound source header is safe to keep: empty
+// (the unset / "unknown" case) or a charset-valid slug no longer than
+// maxSourceLen. It is tighter than validID because a source is a service name,
+// not an id.
+func validSource(s string) bool {
+	return s == "" || (len(s) <= maxSourceLen && validID(s))
+}
+
+// resolveSource returns src unchanged when it passes validSource, and drops any
+// other value to "" so SaveToHeader can never re-emit unsafe or oversized bytes.
 func resolveSource(src string) string {
-	if src == "" || validID(src) {
+	if validSource(src) {
 		return src
 	}
 	return ""

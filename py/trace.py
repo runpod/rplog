@@ -17,6 +17,10 @@ def as_rfc3339(dt: datetime) -> str:
 _MAX_ID_LEN = 200
 _VALID_ID = re.compile(r"\A[A-Za-z0-9._-]+\Z")
 
+# A source is a service name, not an id, so it is bounded far tighter than an id.
+# Mirrors maxSourceLen in the Go trace package.
+_MAX_SOURCE_LEN = 64
+
 
 def _valid_id(s: str) -> bool:
     return bool(s) and len(s) <= _MAX_ID_LEN and _VALID_ID.match(s) is not None
@@ -26,10 +30,16 @@ def _resolve_id(s: str) -> str:
     return s if _valid_id(s) else uuid7()
 
 
+def _valid_source(s: str) -> bool:
+    # Empty is the unset / "unknown" case; otherwise a charset-valid slug no longer
+    # than _MAX_SOURCE_LEN. Mirrors Go's validSource.
+    return s == "" or (len(s) <= _MAX_SOURCE_LEN and _valid_id(s))
+
+
 def _resolve_source(s: str) -> str:
-    # Match Go's resolveSource: keep a valid source, drop anything else (including
-    # empty) to "" so save_to_headers can never re-emit unsafe bytes.
-    return s if _valid_id(s) else ""
+    # Match Go's resolveSource: keep a valid source, drop anything else to "" so
+    # save_to_headers can never re-emit unsafe or oversized bytes.
+    return s if _valid_source(s) else ""
 
 
 def _resolve_start(s: str, now: datetime) -> str:

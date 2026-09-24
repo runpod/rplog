@@ -47,8 +47,11 @@ class TestResolveSource(unittest.TestCase):
         cases = [
             {"description": "empty source stays empty", "input": "", "expected": ""},
             {"description": "valid source kept", "input": "runpod-graphql", "expected": "runpod-graphql"},
+            {"description": "source at max length kept", "input": "a" * 64, "expected": "a" * 64},
             {"description": "poisoned source dropped to empty", "input": "svc\r\nX-Evil: 1", "expected": ""},
             {"description": "spaced source dropped to empty", "input": "not a slug", "expected": ""},
+            {"description": "over-length source dropped to empty", "input": "a" * 65, "expected": ""},
+            {"description": "charset-valid but over-length source dropped", "input": "a" * 200, "expected": ""},
         ]
         for c in cases:
             with self.subTest(c["description"]):
