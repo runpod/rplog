@@ -7,7 +7,7 @@ rplog is runpod's logging and tracing package. It provides a uniform logging imp
 |----------|--------------|
 | Python | [./py](./py) |
 | JavaScript | [./js](./js) |
-| Go | [./go](./go) |
+| Go | [./GO_README.md](./GO_README.md) (package at the repo root) |
 
 
 The following documentation covers language-independent aspects of rplog. For language-specific documentation, see the README in the appropriate subdirectory.
@@ -44,7 +44,7 @@ Generally speaking, `WARN` is to be avoided. If you're logging a warning, you sh
 
 ### Populating your logs with metadata via the `buildmeta` tool
 
-We provide a command-line tool, [buildmeta](./go/cmd/README.md), to populate your logs with metadata. The [releases page](https://github.com/runpod/rplog/releases/) will contain pre-built binaries ready for use: pick the appropriate binary for your platform and put it in your `PATH`.
+We provide a command-line tool, [buildmeta](./cmd/README.md), to populate your logs with metadata. The [releases page](https://github.com/runpod/rplog/releases/) will contain pre-built binaries ready for use: pick the appropriate binary for your platform and put it in your `PATH`.
 
 | OS | ARCH | Binary | Notes |
 |----|------|--------| ------- |
@@ -53,7 +53,7 @@ We provide a command-line tool, [buildmeta](./go/cmd/README.md), to populate you
 | macOS | arm64 | buildmeta_arm64_darwin | newer apple silicon macs |
 | Windows (not WSL) | amd64 | buildmeta_amd64_windows.exe | you probably don't want this |
 
-See the [buildmeta README](./go/cmd/README.md) for information on how to populate your logs with metadata. In short, you should run `buildmeta` as part of your deployment process to inject the build-time metadata into your application, either by generating a `.py` or `.js` file at 'compile time', or by writing a JSON or environment file to disk that's read at runtime.
+See the [buildmeta README](./cmd/README.md) for information on how to populate your logs with metadata. In short, you should run `buildmeta` as part of your deployment process to inject the build-time metadata into your application, either by generating a `.py` or `.js` file at 'compile time', or by writing a JSON or environment file to disk that's read at runtime.
 
 ### Logs: Environment Variables
 
