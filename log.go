@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -13,6 +14,11 @@ import (
 	"github.com/runpod/rplog/trace"
 	"gitlab.com/efronlicht/enve"
 )
+
+// levelAlways sits below every slog level, so a handler built with it filters
+// nothing. It is used only for the one-off startup record, which has to survive
+// any RUNPOD_LOG_LEVEL the service happens to run at.
+const levelAlways = slog.Level(math.MinInt)
 
 // slog.Handler implementation that smuggles the Metadata through the slog.Logger.
 // It is used to add the metadata to every log record, and it grabs the Trace from the context if it exists.
@@ -62,11 +68,6 @@ func Init(m *Metadata, writers ...io.Writer) {
 		m = metadataFromBuildInfo()
 	}
 
-	// AddSource is off by default: a source file/line block on every record is a
-	// large per-line cost and is redundant with structured messages. Callers who
-	// want it can build their own handler.
-	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: false, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
-
 	host, err := os.Hostname()
 	if err != nil {
 		host = "unknown"
@@ -75,18 +76,34 @@ func Init(m *Metadata, writers ...io.Writer) {
 	// so the other VCS fields (vcs_name, which is essentially always "git";
 	// vcs_tag; vcs_time, derivable from the commit) are emitted once at startup
 	// below rather than on every record. They can be joined back via vcs_commit.
-	slog.SetDefault(slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
+	perLine := []slog.Attr{
 		slog.String("vcs_commit", m.VCSCommit),
 		slog.String("env", m.Env),
 		slog.String("hostname", host),
 		slog.String("instance_id", m.InstanceID),
 		slog.String("service", m.Service),
 		slog.String("language_version", runtime.Version()),
-	})}))
+	}
+
+	// AddSource is off by default: a source file/line block on every record is a
+	// large per-line cost and is redundant with structured messages. Callers who
+	// want it can build their own handler.
+	newHandler := func(level slog.Leveler) *Handler {
+		h := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: false, Level: level})
+		return &Handler{Handler: h.WithAttrs(perLine)}
+	}
+
+	slog.SetDefault(slog.New(newHandler(enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo))))
 
 	// Emit the full build metadata exactly once, so the fields no longer stamped
 	// on every line remain available in the logs.
-	slog.Info("rplog initialized",
+	//
+	// This record deliberately bypasses RUNPOD_LOG_LEVEL via its own unfiltered
+	// handler on the same writer. Services that run at WARN or ERROR to control
+	// log volume would otherwise drop it, and vcs_name/vcs_tag/vcs_time would
+	// then appear nowhere at all — neither per-line nor at startup — silently
+	// breaking the join back via vcs_commit. It is one record per process.
+	slog.New(newHandler(levelAlways)).Info("rplog initialized",
 		slog.String("vcs_name", m.VCSName),
 		slog.String("vcs_tag", m.VCSTag),
 		slog.String("vcs_time", m.VCSTime),

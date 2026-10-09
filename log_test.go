@@ -81,7 +81,7 @@ func TestHandlerHandle(t *testing.T) {
 
 	t.Run("boundary/future trace start clamps elapsed to zero", func(t *testing.T) {
 		future := trace.Trace{
-			TraceID:      "t", RequestID: "r",
+			TraceID: "t", RequestID: "r",
 			TraceStart:   time.Now().Add(time.Hour),
 			RequestStart: time.Now().Add(time.Hour),
 		}
@@ -130,16 +130,30 @@ func parseJSONLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return out
 }
 
+// lookupLine returns the first record whose "msg" matches, and whether one did.
+func lookupLine(lines []map[string]any, msg string) (map[string]any, bool) {
+	for _, m := range lines {
+		if m["msg"] == msg {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
+// hasLine reports whether any record has the given "msg".
+func hasLine(lines []map[string]any, msg string) bool {
+	_, ok := lookupLine(lines, msg)
+	return ok
+}
+
 // findLine returns the first record whose "msg" matches, failing if none do.
 func findLine(t *testing.T, lines []map[string]any, msg string) map[string]any {
 	t.Helper()
-	for _, m := range lines {
-		if m["msg"] == msg {
-			return m
-		}
+	m, ok := lookupLine(lines, msg)
+	if !ok {
+		t.Fatalf("no log line with msg=%q found in %v", msg, lines)
 	}
-	t.Fatalf("no log line with msg=%q found in %v", msg, lines)
-	return nil
+	return m
 }
 
 func TestInit(t *testing.T) {
@@ -191,6 +205,61 @@ func TestInit(t *testing.T) {
 		slog.Info("fanout")
 		if !strings.Contains(a.String(), "fanout") || !strings.Contains(b.String(), "fanout") {
 			t.Errorf("multiwriter fanout failed: a=%q b=%q", a.String(), b.String())
+		}
+	})
+
+	// Regression for the review on #4: the startup record carries the VCS fields
+	// that are no longer stamped on every line, so it must survive any
+	// RUNPOD_LOG_LEVEL. Services already run at WARN/ERROR for log-volume
+	// reasons; if this record were leveled, vcs_name/vcs_tag/vcs_time would
+	// appear nowhere at all for those processes.
+	t.Run("startup record survives every RUNPOD_LOG_LEVEL", func(t *testing.T) {
+		tests := []struct {
+			description   string
+			level         string
+			expectStartup bool // the "rplog initialized" record
+			expectInfo    bool // an ordinary Info record
+		}{
+			{"debug: everything emitted", "DEBUG", true, true},
+			{"info: everything emitted", "INFO", true, true},
+			{"warn: info suppressed, startup survives", "WARN", true, false},
+			{"error: info suppressed, startup survives", "ERROR", true, false},
+			{"lowercase level still parsed", "warn", true, false},
+			{"empty falls back to info", "", true, true},
+			{"unparseable falls back to info", "not-a-level", true, true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.description, func(t *testing.T) {
+				t.Setenv("RUNPOD_LOG_LEVEL", tt.level)
+
+				var buf bytes.Buffer
+				Init(&Metadata{
+					Service: "svc", Env: "test", VCSCommit: "abc123",
+					VCSName: "git", VCSTag: "v1.2.3", VCSTime: "2026-01-01T00:00:00Z",
+				}, &buf)
+				slog.Info("ordinary")
+
+				lines := parseJSONLines(t, &buf)
+				gotStartup := hasLine(lines, "rplog initialized")
+				gotInfo := hasLine(lines, "ordinary")
+
+				if gotStartup != tt.expectStartup {
+					t.Errorf("startup record present = %v, expected %v (output: %v)", gotStartup, tt.expectStartup, lines)
+				}
+				if gotInfo != tt.expectInfo {
+					t.Errorf("ordinary Info record present = %v, expected %v (output: %v)", gotInfo, tt.expectInfo, lines)
+				}
+				// Whenever it is emitted, the startup record must carry the full
+				// VCS set — that is the entire reason it bypasses the level.
+				if gotStartup {
+					startup := findLine(t, lines, "rplog initialized")
+					for _, k := range []string{"vcs_name", "vcs_tag", "vcs_time", "vcs_commit"} {
+						if _, ok := startup[k]; !ok {
+							t.Errorf("startup record missing %q: %v", k, startup)
+						}
+					}
+				}
+			})
 		}
 	})
 
