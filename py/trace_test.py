@@ -45,17 +45,30 @@ class TestResolveId(unittest.TestCase):
 class TestResolveSource(unittest.TestCase):
     def test_cases(self):
         cases = [
-            {"description": "empty source stays empty", "input": "", "expected": ""},
+            # positive
             {"description": "valid source kept", "input": "runpod-graphql", "expected": "runpod-graphql"},
+            {"description": "dotted source kept", "input": "svc.api.v2", "expected": "svc.api.v2"},
+            {"description": "single char source kept", "input": "a", "expected": "a"},
+            # the sentinel is itself a valid source and survives a round trip
+            {"description": "literal unknown kept", "input": "unknown", "expected": "unknown"},
+            # boundary
             {"description": "source at max length kept", "input": "a" * 64, "expected": "a" * 64},
-            {"description": "poisoned source dropped to empty", "input": "svc\r\nX-Evil: 1", "expected": ""},
-            {"description": "spaced source dropped to empty", "input": "not a slug", "expected": ""},
-            {"description": "over-length source dropped to empty", "input": "a" * 65, "expected": ""},
-            {"description": "charset-valid but over-length source dropped", "input": "a" * 200, "expected": ""},
+            {"description": "one over max falls back", "input": "a" * 65, "expected": "unknown"},
+            # negative / corner
+            {"description": "absent source falls back to unknown", "input": "", "expected": "unknown"},
+            {"description": "poisoned source falls back to unknown", "input": "svc\r\nX-Evil: 1", "expected": "unknown"},
+            {"description": "newline source falls back", "input": "svc\nevil", "expected": "unknown"},
+            {"description": "spaced source falls back", "input": "not a slug", "expected": "unknown"},
+            {"description": "control byte source falls back", "input": "svc\x00", "expected": "unknown"},
+            {"description": "non-ascii source falls back", "input": "svcé", "expected": "unknown"},
+            {"description": "charset-valid but over-length source falls back", "input": "a" * 200, "expected": "unknown"},
         ]
         for c in cases:
             with self.subTest(c["description"]):
-                self.assertEqual(_resolve_source(c["input"]), c["expected"])
+                got = _resolve_source(c["input"])
+                self.assertEqual(got, c["expected"])
+                # Whatever comes back must always be safe to re-emit as a header.
+                self.assertTrue(_valid_id(got), f"resolved source {got!r} is not header-safe")
 
 
 class TestFromHeaders(unittest.TestCase):
@@ -71,25 +84,32 @@ class TestFromHeaders(unittest.TestCase):
                 "want_trace_source": "main-ui",
             },
             {
-                "description": "absent ids generated",
+                "description": "absent ids generated, absent source is unknown",
                 "headers": {},
                 "want_trace": None,
                 "want_request": None,
-                "want_trace_source": "",
+                "want_trace_source": "unknown",
             },
             {
                 "description": "poisoned trace id regenerated, valid request id kept",
                 "headers": {"X-Trace-ID": "abc\r\nX-Evil: 1", "X-Request-ID": good_req},
                 "want_trace": None,
                 "want_request": good_req,
-                "want_trace_source": "",
+                "want_trace_source": "unknown",
             },
             {
-                "description": "poisoned source dropped to empty",
+                "description": "poisoned source falls back to unknown",
                 "headers": {"X-Trace-ID": good_trace, "X-Request-ID": good_req, "X-Trace-Source": "svc\r\nX-Evil"},
                 "want_trace": good_trace,
                 "want_request": good_req,
-                "want_trace_source": "",
+                "want_trace_source": "unknown",
+            },
+            {
+                "description": "over-length source falls back to unknown",
+                "headers": {"X-Trace-ID": good_trace, "X-Request-ID": good_req, "X-Trace-Source": "a" * 65},
+                "want_trace": good_trace,
+                "want_request": good_req,
+                "want_trace_source": "unknown",
             },
         ]
         for c in cases:
@@ -187,6 +207,37 @@ class TestNewRegression(unittest.TestCase):
         for _ in range(1000):
             seen.add(Trace.new().trace_id)
         self.assertEqual(len(seen), 1000)
+
+
+class TestSourceDefaultAgreement(unittest.TestCase):
+    """new() and from_headers must agree on the default for "no source given".
+
+    Regression for the review on #3: validation must not silently change the
+    sentinel that untagged inbound requests have always logged.
+    """
+
+    def test_cases(self):
+        cases = [
+            {
+                "description": "new() with no source",
+                "trace": Trace.new(),
+                "expected": "unknown",
+            },
+            {
+                "description": "from_headers with no source",
+                "trace": Trace.from_headers({}),
+                "expected": "unknown",
+            },
+            {
+                "description": "from_headers with malformed source",
+                "trace": Trace.from_headers({"X-Trace-Source": "svc\r\nX-Evil: 1"}),
+                "expected": "unknown",
+            },
+        ]
+        for c in cases:
+            with self.subTest(c["description"]):
+                self.assertEqual(c["trace"].trace_source, c["expected"])
+                self.assertEqual(c["trace"].request_source, c["expected"])
 
 
 if __name__ == "__main__":

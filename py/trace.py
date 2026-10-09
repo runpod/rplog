@@ -21,6 +21,10 @@ _VALID_ID = re.compile(r"\A[A-Za-z0-9._-]+\Z")
 # Mirrors maxSourceLen in the Go trace package.
 _MAX_SOURCE_LEN = 64
 
+# The repo-wide sentinel for "no usable source". new() and Go's thisServiceName
+# both fall back to it, so every untagged trace reads the same way in a query.
+_UNKNOWN_SOURCE = "unknown"
+
 
 def _valid_id(s: str) -> bool:
     return bool(s) and len(s) <= _MAX_ID_LEN and _VALID_ID.match(s) is not None
@@ -31,15 +35,21 @@ def _resolve_id(s: str) -> str:
 
 
 def _valid_source(s: str) -> bool:
-    # Empty is the unset / "unknown" case; otherwise a charset-valid slug no longer
-    # than _MAX_SOURCE_LEN. Mirrors Go's validSource.
+    # Empty is the unset case; otherwise a charset-valid slug no longer than
+    # _MAX_SOURCE_LEN. Mirrors Go's validSource.
     return s == "" or (len(s) <= _MAX_SOURCE_LEN and _valid_id(s))
 
 
 def _resolve_source(s: str) -> str:
-    # Match Go's resolveSource: keep a valid source, drop anything else to "" so
-    # save_to_headers can never re-emit unsafe or oversized bytes.
-    return s if _valid_source(s) else ""
+    # Keep a valid, non-empty source; fall back to _UNKNOWN_SOURCE for anything
+    # absent or malformed. The fallback keeps the validation's security property
+    # (save_to_headers can never re-emit unsafe or oversized bytes) while
+    # preserving the sentinel that untagged inbound requests have always logged.
+    #
+    # Note this deliberately differs from Go's resolveSource, which drops to "".
+    # Aligning the two is worth doing, but it is a cross-language contract change
+    # rather than a validation fix, so it is tracked separately.
+    return s if (s and _valid_source(s)) else _UNKNOWN_SOURCE
 
 
 def _resolve_start(s: str, now: datetime) -> str:
@@ -79,8 +89,9 @@ class Trace:
         this will over-write the global trace.
 
         Inbound header values are untrusted: an absent or malformed X-Trace-ID /
-        X-Request-ID is replaced with a fresh uuid, a malformed source is dropped
-        to "", and a malformed X-Trace-Start falls back to now (see _valid_id /
+        X-Request-ID is replaced with a fresh uuid, an absent or malformed source
+        falls back to "unknown" (the same sentinel new() uses), and a malformed
+        X-Trace-Start falls back to now (see _valid_id / _resolve_source /
         _resolve_start). There is no X-Request-Start header — the request timing
         starts when the server receives the request, matching Go's SaveToHeader.
         """
@@ -119,10 +130,10 @@ class Trace:
         global _trace
         t = Trace(
             request_id=uuid7(),
-            request_source="unknown",
+            request_source=_UNKNOWN_SOURCE,
             request_start=now,
             trace_id=uuid7(),
-            trace_source="unknown",
+            trace_source=_UNKNOWN_SOURCE,
             trace_start=now,
         )
         _trace = t
@@ -136,8 +147,9 @@ class Trace:
         persists across the hop while the request_id identifies this sub-request.
 
         Every stored field is already validated at construction (ids charset-checked,
-        source dropped to "" if invalid, trace_start re-formatted through as_rfc3339),
-        so no value written here can carry CR/LF into an outbound header.
+        source reduced to "unknown" if absent or invalid, trace_start re-formatted
+        through as_rfc3339), so no value written here can carry CR/LF into an
+        outbound header.
         """
         headers["X-Trace-ID"] = self.trace_id
         headers["X-Request-ID"] = uuid7()
