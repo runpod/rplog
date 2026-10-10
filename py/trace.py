@@ -1,12 +1,74 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
 
 from uuid7 import uuid7
 
 
 def as_rfc3339(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-4] + "Z"
+
+
+# An inbound id may be at most _MAX_ID_LEN chars and contain only [A-Za-z0-9._-].
+# Anything else (empty, over-long, or carrying CR/LF, control, or non-ascii bytes)
+# is untrusted: an id is regenerated and a source is dropped, so a poisoned inbound
+# header can never be re-emitted by save_to_headers to corrupt a downstream request
+# or a log line. Mirrors validID in the Go trace package.
+_MAX_ID_LEN = 200
+_VALID_ID = re.compile(r"\A[A-Za-z0-9._-]+\Z")
+
+# A source is a service name, not an id, so it is bounded far tighter than an id.
+# Mirrors maxSourceLen in the Go trace package.
+_MAX_SOURCE_LEN = 64
+
+# The repo-wide sentinel for "no usable source". new() and Go's thisServiceName
+# both fall back to it, so every untagged trace reads the same way in a query.
+_UNKNOWN_SOURCE = "unknown"
+
+
+def _valid_id(s: str) -> bool:
+    return bool(s) and len(s) <= _MAX_ID_LEN and _VALID_ID.match(s) is not None
+
+
+def _resolve_id(s: str) -> str:
+    return s if _valid_id(s) else uuid7()
+
+
+def _valid_source(s: str) -> bool:
+    # Empty is the unset case; otherwise a charset-valid slug no longer than
+    # _MAX_SOURCE_LEN. Mirrors Go's validSource.
+    return s == "" or (len(s) <= _MAX_SOURCE_LEN and _valid_id(s))
+
+
+def _resolve_source(s: str) -> str:
+    # Keep a valid, non-empty source; fall back to _UNKNOWN_SOURCE for anything
+    # absent or malformed. The fallback keeps the validation's security property
+    # (save_to_headers can never re-emit unsafe or oversized bytes) while
+    # preserving the sentinel that untagged inbound requests have always logged.
+    #
+    # Note this deliberately differs from Go's resolveSource, which drops to "".
+    # Aligning the two is worth doing, but it is a cross-language contract change
+    # rather than a validation fix, so it is tracked separately.
+    return s if (s and _valid_source(s)) else _UNKNOWN_SOURCE
+
+
+def _resolve_start(s: str, now: datetime) -> str:
+    # Parse an inbound RFC3339 timestamp and re-emit it canonically, falling back
+    # to `now` when the header is absent, malformed, or in the future. Clamping a
+    # future value to now silently (like a malformed one) mirrors Go's
+    # FromHeaderOrNew and stops a caller from choosing the trace's start time.
+    # Re-formatting through as_rfc3339 also means the stored value can never carry
+    # CR/LF (or any other injected bytes) into save_to_headers.
+    if s:
+        try:
+            parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if parsed <= now:
+                return as_rfc3339(parsed)
+        except ValueError:
+            pass
+    return as_rfc3339(now)
 
 
 @dataclass
@@ -25,17 +87,25 @@ class Trace:
     def from_headers(headers: dict[str, str]) -> "Trace":
         """get a trace from a dictionary of headers, or create a new one if it doesn't exist.
         this will over-write the global trace.
+
+        Inbound header values are untrusted: an absent or malformed X-Trace-ID /
+        X-Request-ID is replaced with a fresh uuid, an absent or malformed source
+        falls back to "unknown" (the same sentinel new() uses), and a malformed
+        X-Trace-Start falls back to now (see _valid_id / _resolve_source /
+        _resolve_start). There is no X-Request-Start header — the request timing
+        starts when the server receives the request, matching Go's SaveToHeader.
         """
         global _trace
-        now = as_rfc3339(datetime.now())
+        now_dt = datetime.now(timezone.utc)
+        now = as_rfc3339(now_dt)
 
         t = Trace(
-            request_id=headers.get("X-Request-ID", uuid7()),
-            request_source=headers.get("X-Request-Source", "unknown"),
-            request_start=headers.get("X-Request-Start", now),
-            trace_id=headers.get("X-Trace-ID", uuid7()),
-            trace_source=headers.get("X-Trace-Source", "unknown"),
-            trace_start=headers.get("X-Trace-Start", now),
+            request_id=_resolve_id(headers.get("X-Request-ID", "")),
+            request_source=_resolve_source(headers.get("X-Request-Source", "")),
+            request_start=now,
+            trace_id=_resolve_id(headers.get("X-Trace-ID", "")),
+            trace_source=_resolve_source(headers.get("X-Trace-Source", "")),
+            trace_start=_resolve_start(headers.get("X-Trace-Start", ""), now_dt),
         )
         _trace = t
         return t
@@ -54,16 +124,16 @@ class Trace:
         return _trace
 
     @staticmethod
-    def new():
+    def new() -> "Trace":
         """start a fresh trace and return it, overwriting the global trace if it exists."""
-        now = as_rfc3339(datetime.datetime.now())
+        now = as_rfc3339(datetime.now(timezone.utc))
         global _trace
         t = Trace(
             request_id=uuid7(),
-            request_source="unknown",
+            request_source=_UNKNOWN_SOURCE,
             request_start=now,
             trace_id=uuid7(),
-            trace_source="unknown",
+            trace_source=_UNKNOWN_SOURCE,
             trace_start=now,
         )
         _trace = t
@@ -71,13 +141,22 @@ class Trace:
 
     def save_to_headers(self, headers: dict[str, str]) -> None:
         """save the trace to a dictionary of headers in preparation for an HTTP request.
-        This creates a new request_id and sets the request_start time to now so that the next service in the chain can add its own trace information.
+
+        Writes the same five headers as the Go trace.SaveToHeader, and mints a fresh
+        X-Request-ID: this is a new request within the same trace, so the trace_id
+        persists across the hop while the request_id identifies this sub-request.
+
+        Every stored field is already validated at construction (ids charset-checked,
+        source reduced to "unknown" if absent or invalid, trace_start re-formatted
+        through as_rfc3339), so no value written here can carry CR/LF into an
+        outbound header.
         """
-        headers["X-Request-ID"] = uuid7(),
-        headers["X-Request-Source"] = self.request_source
-        headers["X-Request-Start"] = as_rfc3339(datetime.now())
         headers["X-Trace-ID"] = self.trace_id
+        headers["X-Request-ID"] = uuid7()
+        headers["X-Trace-Start"] = self.trace_start
+        headers["X-Trace-Source"] = self.trace_source
+        headers["X-Request-Source"] = self.request_source
 
 
 """the current trace, if any. this is only valid in a truly single-threaded environment."""
-_trace: Optional[Trace] = None
+_trace: "Trace | None" = None
