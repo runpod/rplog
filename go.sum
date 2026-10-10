@@ -1,4 +1,6 @@
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-gitlab.com/efronlicht/enve v1.0.2 h1:ryivgFrms/4s/sM/ooOeoxZVN/kuwrwxvSSpjoFxhYA=
-gitlab.com/efronlicht/enve v1.0.2/go.mod h1:wDL62C+Pe/M4f4F1ubLkKo1lJnYYWvXbl6yQSzS+8D8=
+gitlab.com/efronlicht/enve v1.2.2 h1:W36cdBlADEhGHBweKb43QkEFpxI/EMVUGrzzqUR16IE=
+gitlab.com/efronlicht/enve v1.2.2/go.mod h1:Yo1/Uc2XjRH0p2tKXJwtZGL61VANtjVUBAQK4k5SOmM=
+gitlab.com/efronlicht/unit v1.0.0 h1:2tCBZGuBy0Lyj3ssvseFdOICsPOd0zDKB0+XOVMfUV0=
+gitlab.com/efronlicht/unit v1.0.0/go.mod h1:TW/2N/y/LW6CC+23MuDDzeLDq4S4dktfpBYzgPn9/08=
