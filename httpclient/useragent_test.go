@@ -75,3 +75,19 @@ func TestUserAgentTransport(t *testing.T) {
 		t.Errorf("User-Agent = %q with an empty userAgent, want Go's default", got)
 	}
 }
+
+type closeIdleTransport struct {
+	http.RoundTripper
+	closed bool
+}
+
+func (t *closeIdleTransport) CloseIdleConnections() { t.closed = true }
+
+func TestUserAgentTransportCloseIdleConnections(t *testing.T) {
+	base := &closeIdleTransport{}
+	client := &http.Client{Transport: userAgentTransport{base: base}}
+	client.CloseIdleConnections()
+	if !base.closed {
+		t.Error("CloseIdleConnections was not forwarded to the base transport")
+	}
+}

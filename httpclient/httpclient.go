@@ -65,15 +65,26 @@ type userAgentTransport struct {
 	base      http.RoundTripper
 }
 
-func (t userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
+func (t userAgentTransport) transport() http.RoundTripper {
+	if t.base != nil {
+		return t.base
 	}
+	return http.DefaultTransport
+}
+
+func (t userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if _, ok := req.Header["User-Agent"]; !ok && t.userAgent != "" {
 		// A RoundTripper must not mutate the request it's given.
 		req = req.Clone(req.Context())
 		req.Header.Set("User-Agent", t.userAgent)
 	}
-	return base.RoundTrip(req)
+	return t.transport().RoundTrip(req)
+}
+
+// CloseIdleConnections forwards to the base transport so that
+// (*http.Client).CloseIdleConnections is not a silent no-op.
+func (t userAgentTransport) CloseIdleConnections() {
+	if c, ok := t.transport().(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
