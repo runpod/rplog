@@ -36,9 +36,12 @@ func New(userAgent string) *http.Client {
 }
 
 // WithTimeout returns a copy of base with timeout d; d == 0 means no timeout,
-// which is what streaming call sites want. The copy shares base's Transport,
-// and so its connection pool — building a client per call site is cheap,
-// building a transport per call site would leak connections.
+// so streaming and long-polling call sites can use this to widen the
+// timeout.
+//
+// The copy shares base's Transport, and so its connection pool — building a
+// client per call site is cheap; building a transport per call site
+// would leak connections.
 func WithTimeout(base *http.Client, d time.Duration) *http.Client {
 	c := *base
 	c.Timeout = d
