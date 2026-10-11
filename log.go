@@ -2,9 +2,9 @@ package rplog
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -14,6 +14,11 @@ import (
 	"github.com/runpod/rplog/trace"
 	"gitlab.com/efronlicht/enve"
 )
+
+// levelAlways sits below every slog level, so a handler built with it filters
+// nothing. It is used only for the one-off startup record, which has to survive
+// any RUNPOD_LOG_LEVEL the service happens to run at.
+const levelAlways = slog.Level(math.MinInt)
 
 // slog.Handler implementation that smuggles the Metadata through the slog.Logger.
 // It is used to add the metadata to every log record, and it grabs the Trace from the context if it exists.
@@ -43,8 +48,12 @@ func (m *Metadata) Fields() map[string]any {
 	}
 }
 
-// Initalize the package with one or more writers. This is optional: if you don't call it, the package will initialize itself with a default writer (os.Stderr)
-// it's OK to use nil for the metadata: this program will fill in on a best-effort basis.
+// Init sets up the package's slog handler and installs it as the slog default
+// (via slog.SetDefault), so afterwards you log with the standard log/slog package.
+// It requires at least one writer and panics if none are provided; multiple
+// writers are combined with io.MultiWriter.
+// It's OK to pass nil for the metadata: the VCS fields are then filled in on a
+// best-effort basis from the binary's build info.
 func Init(m *Metadata, writers ...io.Writer) {
 	var w io.Writer
 	switch len(writers) {
@@ -56,56 +65,87 @@ func Init(m *Metadata, writers ...io.Writer) {
 		w = io.MultiWriter(writers...)
 	}
 	if m == nil {
-		m = &Metadata{}
-		buildinfo, ok := debug.ReadBuildInfo()
-		if !ok {
-			m.VCSName = "unknown"
-			m.VCSCommit = "unknown"
-			m.VCSTag = "unknown"
-			m.VCSTime = "unknown"
-			goto FILLED
-		}
-		for _, v := range buildinfo.Settings {
-			switch v.Key {
-			case "vcs":
-				m.VCSName = v.Value
-			case "vcs.revision", "vcs.commit":
-				m.VCSCommit = v.Value
-			case "vcs.tag":
-				m.VCSTag = v.Value
-			case "vcs.time":
-				m.VCSTime = v.Value
-			}
-		}
+		m = metadataFromBuildInfo()
 	}
-FILLED:
-	fmt.Println("rplog.initEager: found metadata", m)
-
-	jsonHandler := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: true, Level: enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo)})
 
 	host, err := os.Hostname()
 	if err != nil {
 		host = "unknown"
 	}
-	slog.SetDefault(slog.New(&Handler{Handler: jsonHandler.WithAttrs([]slog.Attr{
-		slog.String("vcs_name", m.VCSName),
+	// Per-line attributes are kept lean. vcs_commit uniquely identifies the build,
+	// so the other VCS fields (vcs_name, which is essentially always "git";
+	// vcs_tag; vcs_time, derivable from the commit) are emitted once at startup
+	// below rather than on every record. They can be joined back via vcs_commit.
+	perLine := []slog.Attr{
 		slog.String("vcs_commit", m.VCSCommit),
-		slog.String("vcs_tag", m.VCSTag),
-		slog.String("vcs_time", m.VCSTime),
 		slog.String("env", m.Env),
 		slog.String("hostname", host),
 		slog.String("instance_id", m.InstanceID),
 		slog.String("service", m.Service),
 		slog.String("language_version", runtime.Version()),
-	})}))
+	}
+
+	// AddSource is off by default: a source file/line block on every record is a
+	// large per-line cost and is redundant with structured messages. Callers who
+	// want it can build their own handler.
+	newHandler := func(level slog.Leveler) *Handler {
+		h := slog.NewJSONHandler(w, &slog.HandlerOptions{AddSource: false, Level: level})
+		return &Handler{Handler: h.WithAttrs(perLine)}
+	}
+
+	slog.SetDefault(slog.New(newHandler(enve.FromTextOr("RUNPOD_LOG_LEVEL", slog.LevelInfo))))
+
+	// Emit the full build metadata exactly once, so the fields no longer stamped
+	// on every line remain available in the logs.
+	//
+	// This record deliberately bypasses RUNPOD_LOG_LEVEL via its own unfiltered
+	// handler on the same writer. Services that run at WARN or ERROR to control
+	// log volume would otherwise drop it, and vcs_name/vcs_tag/vcs_time would
+	// then appear nowhere at all — neither per-line nor at startup — silently
+	// breaking the join back via vcs_commit. It is one record per process.
+	slog.New(newHandler(levelAlways)).Info("rplog initialized",
+		slog.String("vcs_name", m.VCSName),
+		slog.String("vcs_tag", m.VCSTag),
+		slog.String("vcs_time", m.VCSTime),
+	)
+}
+
+// metadataFromBuildInfo fills a Metadata on a best-effort basis from the binary's
+// embedded VCS build settings. If no build info is available it falls back to
+// "unknown" for every VCS field.
+func metadataFromBuildInfo() *Metadata {
+	m := &Metadata{}
+	buildinfo, ok := debug.ReadBuildInfo()
+	if !ok {
+		m.VCSName = "unknown"
+		m.VCSCommit = "unknown"
+		m.VCSTag = "unknown"
+		m.VCSTime = "unknown"
+		return m
+	}
+	for _, v := range buildinfo.Settings {
+		switch v.Key {
+		case "vcs":
+			m.VCSName = v.Value
+		case "vcs.revision", "vcs.commit":
+			m.VCSCommit = v.Value
+		case "vcs.tag":
+			m.VCSTag = v.Value
+		case "vcs.time":
+			m.VCSTime = v.Value
+		}
+	}
+	return m
 }
 
 // Handle the log record, adding the metadata to it (always) and the Trace (if it exists).
 func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 	if t, ok := trace.FromCtx(ctx); ok {
 		now := time.Now()
-		traceElapsedMs := now.Sub(t.TraceStart).Milliseconds()
-		requestElapsedMs := now.Sub(t.RequestStart).Milliseconds()
+		// Clamp to 0: a Trace whose start is in the future (clock skew, or a
+		// hostile value smuggled in via CtxWith) must never yield a negative elapsed.
+		traceElapsedMs := max(now.Sub(t.TraceStart).Milliseconds(), 0)
+		requestElapsedMs := max(now.Sub(t.RequestStart).Milliseconds(), 0)
 		r.AddAttrs(
 			slog.String("trace_id", t.TraceID),
 			slog.String("request_id", t.RequestID),
