@@ -76,6 +76,10 @@ func (t userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if _, ok := req.Header["User-Agent"]; !ok && t.userAgent != "" {
 		// A RoundTripper must not mutate the request it's given.
 		req = req.Clone(req.Context())
+		// Clone leaves a nil Header nil; only directly-constructed requests hit this.
+		if req.Header == nil {
+			req.Header = make(http.Header)
+		}
 		req.Header.Set("User-Agent", t.userAgent)
 	}
 	return t.transport().RoundTrip(req)

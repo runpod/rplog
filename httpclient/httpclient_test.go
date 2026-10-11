@@ -39,6 +39,31 @@ func TestNewSendsUserAgent(t *testing.T) {
 	}
 }
 
+func TestRoundTripNilHeader(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.UserAgent()
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = nil
+	resp, err := userAgentTransport{userAgent: testUA}.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got != testUA {
+		t.Errorf("User-Agent = %q, want %q", got, testUA)
+	}
+	if req.Header != nil {
+		t.Errorf("caller's request was mutated: Header = %v", req.Header)
+	}
+}
+
 // The derived client must keep the base's transport: a fresh transport per call
 // site would give each its own connection pool.
 func TestWithTimeoutSharesTransport(t *testing.T) {
