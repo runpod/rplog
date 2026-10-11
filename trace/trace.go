@@ -18,12 +18,6 @@ type Trace struct {
 	TraceStart, RequestStart   time.Time // the time the trace was created and the time the request was received
 }
 
-// like http.ServeFunc, but for clients instead of servers.
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-// implement the http.RoundTripper interface
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 // ClientMiddleware wraps a RoundTripper, adding a Trace to each request's headers.
 // It uses the trace in the request's context if it exists, or creates a new one if it doesn't.
 //
@@ -34,18 +28,35 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // This middleware should be the first one executed in the chain, so that the Trace is available to all subsequent middlewares and handlers.
 // Note that directly applied middlewares execute in Last-In, First-Out order, so this middleware should be the last one applied.
 func ClientMiddleware(rt http.RoundTripper) http.RoundTripper {
-	return roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		// check if the request already has a trace. If not, create a new one.
-		t, ok := FromCtx(r.Context())
-		if !ok {
-			t = New()
-		} else { // make a new request ID for this sub-request before shoving it across the wire
-			t.RequestID = newuuid()
-		}
-		SaveToHeader(r.Header, t)
-		r = r.WithContext(CtxWith(r.Context(), t))
-		return rt.RoundTrip(r)
-	})
+	return clientMiddleware{base: rt}
+}
+
+type clientMiddleware struct{ base http.RoundTripper }
+
+func (m clientMiddleware) RoundTrip(r *http.Request) (*http.Response, error) {
+	// check if the request already has a trace. If not, create a new one.
+	t, ok := FromCtx(r.Context())
+	if !ok {
+		t = New()
+	} else { // make a new request ID for this sub-request before shoving it across the wire
+		t.RequestID = newuuid()
+	}
+	// A RoundTripper must not mutate the request it's given.
+	r = r.Clone(CtxWith(r.Context(), t))
+	// Clone leaves a nil Header nil; only directly-constructed requests hit this.
+	if r.Header == nil {
+		r.Header = make(http.Header)
+	}
+	SaveToHeader(r.Header, t)
+	return m.base.RoundTrip(r)
+}
+
+// CloseIdleConnections forwards to the base transport so that
+// (*http.Client).CloseIdleConnections is not a silent no-op.
+func (m clientMiddleware) CloseIdleConnections() {
+	if c, ok := m.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // ServerMiddleware adds a Trace to the request's context before passing it to the next handler.

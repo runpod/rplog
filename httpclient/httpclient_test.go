@@ -11,9 +11,10 @@ import (
 const testUA = "test-service/1.0"
 
 func TestNewSendsUserAgent(t *testing.T) {
-	var got string
+	var got, traceID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.UserAgent()
+		traceID = r.Header.Get("X-Trace-ID")
 	}))
 	defer srv.Close()
 
@@ -28,6 +29,9 @@ func TestNewSendsUserAgent(t *testing.T) {
 	resp.Body.Close()
 	if got != testUA {
 		t.Errorf("User-Agent = %q, want %q", got, testUA)
+	}
+	if traceID == "" {
+		t.Error("X-Trace-ID not sent")
 	}
 
 	// New must wrap http.DefaultTransport, never replace it: posthog-go clones

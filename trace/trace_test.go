@@ -307,6 +307,54 @@ func TestClientMiddleware(t *testing.T) {
 			t.Errorf("X-Trace-ID = %q, want a generated valid id", got)
 		}
 	})
+
+	t.Run("does not mutate the caller's request", func(t *testing.T) {
+		cap := &capturingRT{}
+		req, _ := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+		resp, err := ClientMiddleware(cap).RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		resp.Body.Close()
+		if len(req.Header) != 0 {
+			t.Errorf("caller's Header = %v, want empty", req.Header)
+		}
+		if _, ok := FromCtx(req.Context()); ok {
+			t.Error("caller's context gained a trace")
+		}
+	})
+
+	t.Run("nil header", func(t *testing.T) {
+		cap := &capturingRT{}
+		req, _ := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+		req.Header = nil
+		resp, err := ClientMiddleware(cap).RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		resp.Body.Close()
+		if got := cap.req.Header.Get(headerTraceID); !validID(got) {
+			t.Errorf("X-Trace-ID = %q, want a generated valid id", got)
+		}
+		if req.Header != nil {
+			t.Errorf("caller's Header = %v, want nil", req.Header)
+		}
+	})
+}
+
+type closeIdleRT struct {
+	capturingRT
+	closed bool
+}
+
+func (c *closeIdleRT) CloseIdleConnections() { c.closed = true }
+
+func TestClientMiddlewareForwardsCloseIdleConnections(t *testing.T) {
+	base := &closeIdleRT{}
+	(&http.Client{Transport: ClientMiddleware(base)}).CloseIdleConnections()
+	if !base.closed {
+		t.Error("CloseIdleConnections was not forwarded to the base transport")
+	}
 }
 
 func TestServerMiddlewarePutsTraceInContext(t *testing.T) {

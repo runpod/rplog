@@ -3,6 +3,8 @@ package httpclient
 import (
 	"net/http"
 	"testing"
+
+	"github.com/runpod/rplog/trace"
 )
 
 // nopTransport stands in for the real base so the benchmarks measure only the
@@ -45,6 +47,12 @@ func BenchmarkBase(b *testing.B) {
 // Worst case: the header is missing, so the wrapper clones the request.
 func BenchmarkTransportUnset(b *testing.B) {
 	rt := userAgentTransport{userAgent: "hapiproxy/1.33.0", base: nopTransport{resp: &http.Response{StatusCode: http.StatusOK}}}
+	benchRoundTrip(b, rt, benchRequest(b, ""))
+}
+
+// New's stack with no User-Agent preset: trace and userAgentTransport each clone.
+func BenchmarkTracedTransportUnset(b *testing.B) {
+	rt := trace.ClientMiddleware(userAgentTransport{userAgent: "hapiproxy/1.33.0", base: nopTransport{resp: &http.Response{StatusCode: http.StatusOK}}})
 	benchRoundTrip(b, rt, benchRequest(b, ""))
 }
 

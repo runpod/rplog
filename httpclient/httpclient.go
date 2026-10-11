@@ -1,6 +1,7 @@
 // Package httpclient builds clients for a service's own outbound calls: one
-// shared connection pool under a User-Agent-setting RoundTripper. The caller
-// supplies the User-Agent; nothing here is specific to a service.
+// shared connection pool under RoundTrippers that set trace headers and a
+// User-Agent. The caller supplies the User-Agent; nothing here is specific to
+// a service.
 //
 // The transport in this library wraps http.DefaultTransport rather than
 // replacing it, so every derived client shares the process-wide connection
@@ -11,6 +12,8 @@ package httpclient
 import (
 	"net/http"
 	"time"
+
+	"github.com/runpod/rplog/trace"
 )
 
 // DefaultTimeout bounds any request whose call site doesn't override it. It is
@@ -28,12 +31,12 @@ func UserAgent(name, version string) string {
 }
 
 // New returns the client to inject wherever a service makes outbound requests.
-// It sends userAgent on requests that don't set their own (empty leaves Go's
-// default).
+// It sends trace headers (see trace.ClientMiddleware) on every request, and
+// userAgent on requests that don't set their own (empty leaves Go's default).
 func New(userAgent string) *http.Client {
 	return &http.Client{
 		Timeout:   DefaultTimeout,
-		Transport: userAgentTransport{userAgent: userAgent, base: http.DefaultTransport},
+		Transport: trace.ClientMiddleware(userAgentTransport{userAgent: userAgent, base: http.DefaultTransport}),
 	}
 }
 
