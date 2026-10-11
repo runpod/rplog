@@ -1,6 +1,11 @@
 // Package httpclient builds clients for a service's own outbound calls: one
 // shared connection pool under a User-Agent-setting RoundTripper. The caller
 // supplies the User-Agent; nothing here is specific to a service.
+//
+// The transport in this library wraps http.DefaultTransport rather than
+// replacing it, so every derived client shares the process-wide connection
+// pool and libraries that clone http.DefaultTransport through a
+// *http.Transport assertion (posthog-go) keep working.
 package httpclient
 
 import (
@@ -24,10 +29,7 @@ func UserAgent(name, version string) string {
 
 // New returns the client to inject wherever a service makes outbound requests.
 // It sends userAgent on requests that don't set their own (empty leaves Go's
-// default). Its transport wraps http.DefaultTransport rather than replacing it,
-// so every derived client shares the process-wide connection pool and
-// libraries that clone http.DefaultTransport through a *http.Transport
-// assertion (posthog-go) keep working.
+// default).
 func New(userAgent string) *http.Client {
 	return &http.Client{
 		Timeout:   DefaultTimeout,
@@ -41,8 +43,11 @@ func New(userAgent string) *http.Client {
 //
 // The copy shares base's Transport, and so its connection pool — building a
 // client per call site is cheap; building a transport per call site
-// would leak connections.
+// would leak connections. A nil base means http.DefaultClient.
 func WithTimeout(base *http.Client, d time.Duration) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
 	c := *base
 	c.Timeout = d
 	return &c

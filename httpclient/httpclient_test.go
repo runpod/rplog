@@ -87,6 +87,19 @@ func TestWithTimeoutSharesTransport(t *testing.T) {
 	}
 }
 
+func TestWithTimeoutNilBase(t *testing.T) {
+	c := WithTimeout(nil, 4*time.Second)
+	if c == http.DefaultClient {
+		t.Fatal("WithTimeout returned http.DefaultClient itself, so it mutated shared state")
+	}
+	if c.Timeout != 4*time.Second {
+		t.Errorf("Timeout = %v, want 4s", c.Timeout)
+	}
+	if http.DefaultClient.Timeout != 0 {
+		t.Errorf("http.DefaultClient.Timeout = %v, want it untouched at 0", http.DefaultClient.Timeout)
+	}
+}
+
 // The derived client's timeout, not the base's, is the one a request is held
 // to — in both directions, including the 0 case.
 func TestWithTimeoutOverridesBaseTimeout(t *testing.T) {

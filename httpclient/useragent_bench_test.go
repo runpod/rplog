@@ -24,7 +24,7 @@ func benchRequest(b *testing.B, ua string) *http.Request {
 	return req
 }
 
-func run(b *testing.B, rt http.RoundTripper, req *http.Request) {
+func benchRoundTrip(b *testing.B, rt http.RoundTripper, req *http.Request) {
 	b.ReportAllocs()
 	for b.Loop() {
 		resp, err := rt.RoundTrip(req)
@@ -39,17 +39,17 @@ func run(b *testing.B, rt http.RoundTripper, req *http.Request) {
 // wrapper's overhead.
 func BenchmarkBase(b *testing.B) {
 	base := nopTransport{resp: &http.Response{StatusCode: http.StatusOK}}
-	run(b, base, benchRequest(b, ""))
+	benchRoundTrip(b, base, benchRequest(b, ""))
 }
 
 // Worst case: the header is missing, so the wrapper clones the request.
 func BenchmarkTransportUnset(b *testing.B) {
 	rt := userAgentTransport{userAgent: "hapiproxy/1.33.0", base: nopTransport{resp: &http.Response{StatusCode: http.StatusOK}}}
-	run(b, rt, benchRequest(b, ""))
+	benchRoundTrip(b, rt, benchRequest(b, ""))
 }
 
 // Pass-through case: the caller set a User-Agent, so no clone happens.
 func BenchmarkTransportPreset(b *testing.B) {
 	rt := userAgentTransport{userAgent: "hapiproxy/1.33.0", base: nopTransport{resp: &http.Response{StatusCode: http.StatusOK}}}
-	run(b, rt, benchRequest(b, "caller/1.0"))
+	benchRoundTrip(b, rt, benchRequest(b, "caller/1.0"))
 }
