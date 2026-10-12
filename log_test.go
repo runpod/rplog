@@ -296,11 +296,13 @@ func TestConcurrentHandle(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 50 {
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			for range 200 {
 				logger.InfoContext(ctx, "concurrent", slog.Int("g", i))
 			}
-		})
+		}()
 	}
 	wg.Wait()
 }
