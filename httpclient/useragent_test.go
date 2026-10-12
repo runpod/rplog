@@ -91,3 +91,34 @@ func TestUserAgentTransportCloseIdleConnections(t *testing.T) {
 		t.Error("CloseIdleConnections was not forwarded to the base transport")
 	}
 }
+
+type capturingTransport struct {
+	closeIdleTransport
+	req *http.Request
+}
+
+func (c *capturingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.req = r
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+}
+
+// Middlewares inside base, such as host's logger, rely on seeing trace headers.
+func TestTransportWrapsBase(t *testing.T) {
+	base := &capturingTransport{}
+	client := &http.Client{Transport: Transport(testUA, base)}
+	resp, err := client.Get("http://example.invalid/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := base.req.Header.Get("X-Trace-ID"); got == "" {
+		t.Error("base did not see X-Trace-ID")
+	}
+	if got := base.req.UserAgent(); got != testUA {
+		t.Errorf("User-Agent = %q, want %q", got, testUA)
+	}
+	client.CloseIdleConnections()
+	if !base.closed {
+		t.Error("CloseIdleConnections was not forwarded to the base transport")
+	}
+}
