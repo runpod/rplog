@@ -100,15 +100,16 @@ func handler(w http.ResponseWriter, r *http.Request) {
 Build one client at startup and inject it wherever the service makes requests:
 
 ```go
-ua := httpclient.UserAgent("my-service", version) // "my-service/v1.2.3"
-if !httpclient.ValidUserAgent(ua) {
-	log.Fatalf("invalid user agent %q", ua)
-}
-client := httpclient.New(ua)
+client := httpclient.New("my-service", version) // User-Agent "my-service/v1.2.3"
 ```
 
+`New` panics if the name or version contains control characters, so a bad
+version string fails at startup rather than on every request. For a User-Agent
+not of the `name/version` form, use `httpclient.ForUserAgent(ua)`, which
+validates the same way.
+
 Each request then carries the context's trace (or a new one) with a fresh
-`request_id`, plus `ua` as its User-Agent unless the request sets its own. Pass
+`request_id`, plus that User-Agent unless the request sets its own. Pass
 the inbound context so the trace continues:
 
 ```go
@@ -129,7 +130,10 @@ middleware inside `base` sees the trace headers.
 ```go
 client := &http.Client{
 	Timeout:   httpclient.DefaultTimeout,
-	Transport: httpclient.Transport(ua, logMiddleware(http.DefaultTransport)),
+	Transport: httpclient.Transport(
+		httpclient.UserAgent("my-service", version),
+		logMiddleware(http.DefaultTransport),
+	),
 }
 ```
 

@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-const testUA = "test-service/1.0"
+const (
+	testName    = "test-service"
+	testVersion = "1.0"
+	testUA      = testName + "/" + testVersion
+)
 
 func TestNewSendsUserAgent(t *testing.T) {
 	var got, traceID string
@@ -18,7 +22,7 @@ func TestNewSendsUserAgent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(testUA)
+	c := New(testName, testVersion)
 	if c.Timeout != DefaultTimeout {
 		t.Errorf("Timeout = %v, want %v", c.Timeout, DefaultTimeout)
 	}
@@ -71,7 +75,7 @@ func TestRoundTripNilHeader(t *testing.T) {
 // The derived client must keep the base's transport: a fresh transport per call
 // site would give each its own connection pool.
 func TestWithTimeoutSharesTransport(t *testing.T) {
-	base := New(testUA)
+	base := New(testName, testVersion)
 	derived := WithTimeout(base, 4*time.Second)
 
 	if derived == base {
@@ -126,7 +130,7 @@ func TestWithTimeoutOverridesBaseTimeout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			base := New(testUA)
+			base := New(testName, testVersion)
 			base.Timeout = tt.base
 			resp, err := WithTimeout(base, tt.derived).Get(srv.URL)
 			if err == nil {

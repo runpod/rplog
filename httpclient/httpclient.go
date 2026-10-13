@@ -10,17 +10,19 @@
 package httpclient
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/runpod/rplog/trace"
-	"golang.org/x/net/http/httpguts"
 )
 
 const DefaultTimeout = 30 * time.Second
 
 // UserAgent returns a User-Agent of the conventional "name/version" form, or
 // just name when version is empty.
+//
+// Usually you won't use this directly, but will just call New() to get a client.
 func UserAgent(name, version string) string {
 	if version == "" {
 		return name
@@ -28,20 +30,32 @@ func UserAgent(name, version string) string {
 	return name + "/" + version
 }
 
-// ValidUserAgent reports whether s is a valid header value. Go rejects invalid
-// values per request, so call this at startup when s comes from build metadata
-// or the environment.
-func ValidUserAgent(s string) bool {
-	return httpguts.ValidHeaderFieldValue(s)
+// validUserAgent reports whether s is a valid header value. Go rejects invalid
+// values per request, so Transport checks once at construction instead.
+// This is silghtly more restrictive than Go, which accepts tab.
+func validUserAgent(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 0x20) || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // New returns the client to inject wherever a service makes outbound requests.
 // It sends trace headers (see trace.ClientMiddleware) on every request, and
-// userAgent on requests that don't set their own (empty leaves Go's default).
+// UserAgent(name, version) on requests that don't set their own (empty leaves
+// Go's default). It panics if it doesn't pass validUserAgent().
 //
 // This function assumes we don't need to create one without trace headers; if
 // we ever do, we can make a NewWithoutTrace function.
-func New(userAgent string) *http.Client {
+func New(name, version string) *http.Client {
+	return ForUserAgent(UserAgent(name, version))
+}
+
+// ForUserAgent is New with a complete User-Agent, for when it isn't of the
+// "name/version" form. It panics if userAgent contains control characters.
+func ForUserAgent(userAgent string) *http.Client {
 	return &http.Client{
 		Timeout:   DefaultTimeout,
 		Transport: Transport(userAgent, nil),
@@ -51,8 +65,11 @@ func New(userAgent string) *http.Client {
 // Transport wraps base (http.DefaultTransport if nil) so requests carry trace
 // headers and userAgent, as New's client does. Trace is outermost, so
 // middlewares inside base see the trace headers; wrap logging in base, not
-// around the result.
+// around the result. It panics if userAgent contains control characters.
 func Transport(userAgent string, base http.RoundTripper) http.RoundTripper {
+	if !validUserAgent(userAgent) {
+		panic(fmt.Sprintf("httpclient: invalid User-Agent %q", userAgent))
+	}
 	return trace.ClientMiddleware(userAgentTransport{userAgent: userAgent, base: base})
 }
 

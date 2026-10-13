@@ -87,7 +87,7 @@ Only the first two are required; the rest are metadata. Every hop applies **prop
 
 ### Go usage
 - **Inbound:** wrap your handler with `trace.ServerMiddleware`, which stores the `Trace` on the request context so downstream code and logs pick it up.
-- **Outbound:** use the client from `httpclient.New(userAgent)` rather than the `trace` package directly. It keeps the context's `TraceID`, mints a fresh `RequestID` per call, and sets a User-Agent. Attach other middleware via `httpclient.Transport(userAgent, base)`.
+- **Outbound:** use the client from `httpclient.New(name, version)` rather than the `trace` package directly. It keeps the context's `TraceID`, mints a fresh `RequestID` per call, and sets a User-Agent. Attach other middleware via `httpclient.Transport(userAgent, base)`.
 
 See [GO_README.md](./GO_README.md#tracing-and-outbound-http) for details.
 

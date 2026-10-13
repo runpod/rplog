@@ -35,26 +35,34 @@ var validUserAgentTests = []struct {
 	{"svc\x7f", false},
 }
 
-func TestValidUserAgent(t *testing.T) {
+func TestForUserAgentPanicsOnInvalid(t *testing.T) {
 	for _, tt := range validUserAgentTests {
-		if got := ValidUserAgent(tt.in); got != tt.want {
-			t.Errorf("ValidUserAgent(%q) = %v, want %v", tt.in, got, tt.want)
-		}
+		func() {
+			defer func() {
+				if panicked := recover() != nil; panicked == tt.want {
+					t.Errorf("ForUserAgent(%q): panicked=%v, want %v", tt.in, panicked, !tt.want)
+				}
+			}()
+			ForUserAgent(tt.in)
+		}()
 	}
 }
 
-// Every value ValidUserAgent accepts must be sendable, and every value it
+// Every value validUserAgent accepts must be sendable, and every value it
 // rejects must fail, or the check doesn't match Go's.
 func TestValidUserAgentMatchesTransport(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
 	for _, tt := range validUserAgentTests {
-		resp, err := (&http.Client{Transport: Transport(tt.in, nil)}).Get(srv.URL)
+		if got := validUserAgent(tt.in); got != tt.want {
+			t.Errorf("validUserAgent(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+		resp, err := (&http.Client{Transport: userAgentTransport{userAgent: tt.in}}).Get(srv.URL)
 		if err == nil {
 			resp.Body.Close()
 		}
 		if (err == nil) != tt.want {
-			t.Errorf("UA %q: ValidUserAgent=%v, request err=%v", tt.in, tt.want, err)
+			t.Errorf("UA %q: valid=%v, request err=%v", tt.in, tt.want, err)
 		}
 	}
 }
