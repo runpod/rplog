@@ -65,15 +65,20 @@ Every record carries these fields (see the
 Levels follow `slog`: `DEBUG`, `INFO`, `WARN`, `ERROR`. The minimum level is read
 once at `Init` from `RUNPOD_LOG_LEVEL` (default `INFO`).
 
-## Tracing
+## Tracing and outbound HTTP
 
-The [`trace`](./trace) subpackage propagates a `Trace` (`trace_id`, `request_id`,
-their source services, and start times) across service boundaries via HTTP
-headers. rplog's handler then automatically adds `trace_id`, `request_id`,
-`trace_elapsed_ms`, and `request_elapsed_ms` to any record logged with a context
-that carries a `Trace`.
+A `Trace` (`trace_id`, `request_id`, their source services, and start times)
+travels between services as HTTP headers. Any record logged with a context
+carrying a `Trace` automatically gets `trace_id`, `request_id`,
+`trace_elapsed_ms`, and `request_elapsed_ms`.
 
-Server side — attach a trace to every inbound request:
+A service needs two pieces: `trace.ServerMiddleware` on inbound requests, and
+an [`httpclient`](./httpclient) client for outbound ones. Prefer these over the
+lower-level [`trace`](./trace) API (`ClientMiddleware`, `FromHeaderOrNew`,
+`CtxWith`, ...); `httpclient` already applies the trace layer in the right
+order, and also sets a User-Agent.
+
+### Inbound
 
 ```go
 mux := http.NewServeMux()
@@ -81,19 +86,70 @@ mux := http.NewServeMux()
 http.ListenAndServe(":8080", trace.ServerMiddleware(mux))
 ```
 
-Client side — forward the existing trace (or mint one) on outbound requests:
-
-```go
-http.DefaultClient.Transport = trace.ClientMiddleware(http.DefaultTransport)
-```
-
-Inside a handler, log with the request context so the trace fields appear:
+`ServerMiddleware` must be the outermost handler so that every other middleware
+sees the trace. Log with the request context so the trace fields appear:
 
 ```go
 func handler(w http.ResponseWriter, r *http.Request) {
 	slog.InfoContext(r.Context(), "handling request")
 }
 ```
+
+### Outbound
+
+Build one client at startup and inject it wherever the service makes requests:
+
+```go
+client := httpclient.New("my-service", version) // User-Agent "my-service/v1.2.3"
+```
+
+`New` panics if the name or version contains control characters, so a bad
+version string fails at startup rather than on every request. For a User-Agent
+not of the `name/version` form, use `httpclient.ForUserAgent(ua)`, which
+validates the same way.
+
+Each request then carries the context's trace (or a new one) with a fresh
+`request_id`, plus that User-Agent unless the request sets its own. Pass
+the inbound context so the trace continues:
+
+```go
+req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
+resp, err := client.Do(req)
+```
+
+Every client shares `http.DefaultTransport`'s connection pool. Prefer injecting
+the client to wrapping `http.DefaultClient`.
+
+### Adding middleware
+
+Attach your own middleware (logging, metrics, ...) to the client by passing it
+as `base` to `httpclient.Transport`. Don't wrap the returned transport, and
+don't add `trace.ClientMiddleware` yourself: the trace layer is outermost, so
+middleware inside `base` sees the trace headers.
+
+```go
+client := &http.Client{
+	Timeout:   httpclient.DefaultTimeout,
+	Transport: httpclient.Transport(
+		httpclient.UserAgent("my-service", version),
+		logMiddleware(http.DefaultTransport),
+	),
+}
+```
+
+### Timeouts
+
+The client's `DefaultTimeout` (30s) is a backstop that applies to every request
+alongside any context deadline; whichever is shorter wins. Put per-request
+deadlines on the request's context. To override the backstop (e.g. for
+streaming or long-polling call sites), derive a client with `WithTimeout`; it
+shares the original's transport and connection pool:
+
+```go
+streamClient := httpclient.WithTimeout(client, 10*time.Minute)
+```
+
+### Inbound validation
 
 Incoming header values are treated as untrusted. An `X-Trace-ID` /
 `X-Request-ID` that is empty, longer than 200 bytes, or contains any byte

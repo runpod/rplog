@@ -1,0 +1,147 @@
+package httpclient
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+	"time"
+)
+
+const (
+	testName    = "test-service"
+	testVersion = "1.0"
+	testUA      = testName + "/" + testVersion
+)
+
+func TestNewSendsUserAgent(t *testing.T) {
+	var got, traceID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.UserAgent()
+		traceID = r.Header.Get("X-Trace-ID")
+	}))
+	defer srv.Close()
+
+	c := New(testName, testVersion)
+	if c.Timeout != DefaultTimeout {
+		t.Errorf("Timeout = %v, want %v", c.Timeout, DefaultTimeout)
+	}
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got != testUA {
+		t.Errorf("User-Agent = %q, want %q", got, testUA)
+	}
+	if traceID == "" {
+		t.Error("X-Trace-ID not sent")
+	}
+
+	// New must wrap http.DefaultTransport, never replace it: posthog-go clones
+	// it through a *http.Transport type assertion when it builds its client, so
+	// a wrapper installed globally panics at startup. That is what took down the
+	// first attempt at this change.
+	if _, ok := http.DefaultTransport.(*http.Transport); !ok {
+		t.Fatalf("http.DefaultTransport = %T, want *http.Transport", http.DefaultTransport)
+	}
+}
+
+func TestRoundTripNilHeader(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.UserAgent()
+	}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header = nil
+	resp, err := userAgentTransport{userAgent: testUA}.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got != testUA {
+		t.Errorf("User-Agent = %q, want %q", got, testUA)
+	}
+	if req.Header != nil {
+		t.Errorf("caller's request was mutated: Header = %v", req.Header)
+	}
+}
+
+// The derived client must keep the base's transport: a fresh transport per call
+// site would give each its own connection pool.
+func TestWithTimeoutSharesTransport(t *testing.T) {
+	base := New(testName, testVersion)
+	derived := WithTimeout(base, 4*time.Second)
+
+	if derived == base {
+		t.Fatal("WithTimeout returned the base client, so it mutated shared state")
+	}
+	if derived.Transport != base.Transport {
+		t.Errorf("Transport = %v, want the base's %v", derived.Transport, base.Transport)
+	}
+	if derived.Timeout != 4*time.Second {
+		t.Errorf("Timeout = %v, want 4s", derived.Timeout)
+	}
+	if base.Timeout != DefaultTimeout {
+		t.Errorf("base Timeout = %v, want it untouched at %v", base.Timeout, DefaultTimeout)
+	}
+	if got := WithTimeout(base, 0).Timeout; got != 0 {
+		t.Errorf("WithTimeout(base, 0).Timeout = %v, want 0 (streaming call sites rely on it)", got)
+	}
+}
+
+func TestWithTimeoutNilBase(t *testing.T) {
+	c := WithTimeout(nil, 4*time.Second)
+	if c == http.DefaultClient {
+		t.Fatal("WithTimeout returned http.DefaultClient itself, so it mutated shared state")
+	}
+	if c.Timeout != 4*time.Second {
+		t.Errorf("Timeout = %v, want 4s", c.Timeout)
+	}
+	if http.DefaultClient.Timeout != 0 {
+		t.Errorf("http.DefaultClient.Timeout = %v, want it untouched at 0", http.DefaultClient.Timeout)
+	}
+}
+
+// The derived client's timeout, not the base's, is the one a request is held
+// to — in both directions, including the 0 case.
+func TestWithTimeoutOverridesBaseTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(150 * time.Millisecond):
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		name          string
+		base, derived time.Duration
+		wantTimeout   bool
+	}{
+		{"shorter than base", time.Hour, 20 * time.Millisecond, true},
+		{"longer than base", 20 * time.Millisecond, time.Hour, false},
+		{"zero disables base timeout", 20 * time.Millisecond, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := New(testName, testVersion)
+			base.Timeout = tt.base
+			resp, err := WithTimeout(base, tt.derived).Get(srv.URL)
+			if err == nil {
+				resp.Body.Close()
+			}
+			switch {
+			case tt.wantTimeout && !os.IsTimeout(err):
+				t.Fatalf("err = %v, want a timeout from the derived client's %v", err, tt.derived)
+			case !tt.wantTimeout && err != nil:
+				t.Fatalf("request failed with the base's %v still in effect: %v", tt.base, err)
+			}
+		})
+	}
+}
