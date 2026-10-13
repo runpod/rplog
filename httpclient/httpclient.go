@@ -32,7 +32,7 @@ func UserAgent(name, version string) string {
 
 // validUserAgent reports whether s is a valid header value. Go rejects invalid
 // values per request, so Transport checks once at construction instead.
-// This is silghtly more restrictive than Go, which accepts tab.
+// This is slightly more restrictive than Go, which accepts tab.
 func validUserAgent(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if c := s[i]; (c < 0x20) || c == 0x7f {

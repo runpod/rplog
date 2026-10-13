@@ -28,7 +28,7 @@ var validUserAgentTests = []struct {
 	{"", true},
 	{"svc/1.0", true},
 	{"svc/1.0 (linux; amd64)", true},
-	{"svc/1.0\tx", true},
+	{"svc/1.0\tx", false}, // Go accepts tab; we don't.
 	{"svc/1.0\r\nX-Injected: evil", false},
 	{"svc/1.0\n", false},
 	{"svc\x00", false},
@@ -48,8 +48,8 @@ func TestForUserAgentPanicsOnInvalid(t *testing.T) {
 	}
 }
 
-// Every value validUserAgent accepts must be sendable, and every value it
-// rejects must fail, or the check doesn't match Go's.
+// Every value validUserAgent accepts must be sendable, or requests can fail
+// after construction. It may reject values Go accepts.
 func TestValidUserAgentMatchesTransport(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
@@ -61,8 +61,8 @@ func TestValidUserAgentMatchesTransport(t *testing.T) {
 		if err == nil {
 			resp.Body.Close()
 		}
-		if (err == nil) != tt.want {
-			t.Errorf("UA %q: valid=%v, request err=%v", tt.in, tt.want, err)
+		if tt.want && err != nil {
+			t.Errorf("UA %q: valid but request failed: %v", tt.in, err)
 		}
 	}
 }
