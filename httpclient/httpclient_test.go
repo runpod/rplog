@@ -115,36 +115,29 @@ func TestWithTimeoutOverridesBaseTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Run("shorter than base", func(t *testing.T) {
-		base := New(testUA)
-		base.Timeout = time.Hour
-		resp, err := WithTimeout(base, 20*time.Millisecond).Get(srv.URL)
-		if err == nil {
-			resp.Body.Close()
-			t.Fatal("request succeeded, want timeout from the derived client's 20ms")
-		}
-		if !os.IsTimeout(err) {
-			t.Fatalf("err = %v, want a timeout", err)
-		}
-	})
-
-	t.Run("longer than base", func(t *testing.T) {
-		base := New(testUA)
-		base.Timeout = 20 * time.Millisecond
-		resp, err := WithTimeout(base, time.Hour).Get(srv.URL)
-		if err != nil {
-			t.Fatalf("request failed with the base's 20ms still in effect: %v", err)
-		}
-		resp.Body.Close()
-	})
-
-	t.Run("zero disables base timeout", func(t *testing.T) {
-		base := New(testUA)
-		base.Timeout = 20 * time.Millisecond
-		resp, err := WithTimeout(base, 0).Get(srv.URL)
-		if err != nil {
-			t.Fatalf("request failed with the base's 20ms still in effect: %v", err)
-		}
-		resp.Body.Close()
-	})
+	tests := []struct {
+		name          string
+		base, derived time.Duration
+		wantTimeout   bool
+	}{
+		{"shorter than base", time.Hour, 20 * time.Millisecond, true},
+		{"longer than base", 20 * time.Millisecond, time.Hour, false},
+		{"zero disables base timeout", 20 * time.Millisecond, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := New(testUA)
+			base.Timeout = tt.base
+			resp, err := WithTimeout(base, tt.derived).Get(srv.URL)
+			if err == nil {
+				resp.Body.Close()
+			}
+			switch {
+			case tt.wantTimeout && !os.IsTimeout(err):
+				t.Fatalf("err = %v, want a timeout from the derived client's %v", err, tt.derived)
+			case !tt.wantTimeout && err != nil:
+				t.Fatalf("request failed with the base's %v still in effect: %v", tt.base, err)
+			}
+		})
+	}
 }

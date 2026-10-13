@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/runpod/rplog/trace"
+	"golang.org/x/net/http/httpguts"
 )
 
 const DefaultTimeout = 30 * time.Second
@@ -25,6 +26,13 @@ func UserAgent(name, version string) string {
 		return name
 	}
 	return name + "/" + version
+}
+
+// ValidUserAgent reports whether s is a valid header value. Go rejects invalid
+// values per request, so call this at startup when s comes from build metadata
+// or the environment.
+func ValidUserAgent(s string) bool {
+	return httpguts.ValidHeaderFieldValue(s)
 }
 
 // New returns the client to inject wherever a service makes outbound requests.

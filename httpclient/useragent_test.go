@@ -21,6 +21,44 @@ func TestUserAgent(t *testing.T) {
 	}
 }
 
+var validUserAgentTests = []struct {
+	in   string
+	want bool
+}{
+	{"", true},
+	{"svc/1.0", true},
+	{"svc/1.0 (linux; amd64)", true},
+	{"svc/1.0\tx", true},
+	{"svc/1.0\r\nX-Injected: evil", false},
+	{"svc/1.0\n", false},
+	{"svc\x00", false},
+	{"svc\x7f", false},
+}
+
+func TestValidUserAgent(t *testing.T) {
+	for _, tt := range validUserAgentTests {
+		if got := ValidUserAgent(tt.in); got != tt.want {
+			t.Errorf("ValidUserAgent(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// Every value ValidUserAgent accepts must be sendable, and every value it
+// rejects must fail, or the check doesn't match Go's.
+func TestValidUserAgentMatchesTransport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	for _, tt := range validUserAgentTests {
+		resp, err := (&http.Client{Transport: Transport(tt.in, nil)}).Get(srv.URL)
+		if err == nil {
+			resp.Body.Close()
+		}
+		if (err == nil) != tt.want {
+			t.Errorf("UA %q: ValidUserAgent=%v, request err=%v", tt.in, tt.want, err)
+		}
+	}
+}
+
 func TestUserAgentTransport(t *testing.T) {
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,51 +66,35 @@ func TestUserAgentTransport(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	get := func(t *testing.T, client *http.Client, ua string) {
-		t.Helper()
-		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ua != "" {
-			req.Header.Set("User-Agent", ua)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
+	tests := []struct {
+		name, transportUA, requestUA, want string
+	}{
+		{"default applied", testUA, "", testUA},
+		{"caller's own wins", testUA, "caller/1.0", "caller/1.0"},
+		{"empty passes through to Go's default", "", "", "Go-http-client/1.1"},
 	}
-
-	client := &http.Client{Transport: userAgentTransport{userAgent: "test-service/1.0"}}
-
-	get(t, client, "")
-	if got != "test-service/1.0" {
-		t.Errorf("User-Agent = %q, want test-service/1.0", got)
-	}
-
-	// A caller's own User-Agent wins, and the request it handed us is not mutated.
-	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("User-Agent", "caller/1.0")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if got != "caller/1.0" {
-		t.Errorf("User-Agent = %q, want caller/1.0", got)
-	}
-	if h := req.Header.Get("User-Agent"); h != "caller/1.0" {
-		t.Errorf("request mutated: User-Agent = %q", h)
-	}
-
-	// No identity configured: pass through and leave Go's default.
-	get(t, &http.Client{Transport: userAgentTransport{}}, "")
-	if got != "Go-http-client/1.1" {
-		t.Errorf("User-Agent = %q with an empty userAgent, want Go's default", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.requestUA != "" {
+				req.Header.Set("User-Agent", tt.requestUA)
+			}
+			client := &http.Client{Transport: userAgentTransport{userAgent: tt.transportUA}}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if got != tt.want {
+				t.Errorf("User-Agent = %q, want %q", got, tt.want)
+			}
+			if h := req.Header.Get("User-Agent"); h != tt.requestUA {
+				t.Errorf("request mutated: User-Agent = %q", h)
+			}
+		})
 	}
 }
 
