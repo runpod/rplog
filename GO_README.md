@@ -95,6 +95,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+Gin services use [`tracegin.Middleware`](./trace/tracegin) instead; other
+services use `trace.ServerMiddleware`. Register it before any other middleware:
+
+```go
+router := gin.New()
+router.Use(tracegin.Middleware)
+```
+
 ### Outbound
 
 Build one client at startup and inject it wherever the service makes requests:
