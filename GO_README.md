@@ -95,13 +95,18 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-Gin services use [`tracegin.Middleware`](./trace/tracegin) instead; other
-services use `trace.ServerMiddleware`. Register it before any other middleware:
+`*gin.Engine` is an `http.Handler`, so gin services wrap the engine the same way:
 
 ```go
 router := gin.New()
-router.Use(tracegin.Middleware)
+// router.Use(...), routes ...
+srv := &http.Server{Addr: ":8080", Handler: trace.ServerMiddleware(router)}
 ```
+
+In gin handlers, use `c.Request.Context()`, not `c`, as the context. By default
+`(*gin.Context).Value` does not fall back to the request context, so
+`trace.FromCtx(c)` finds no trace, logs lose the trace fields, and outbound
+calls start a new trace. Alternatively, set `router.ContextWithFallback = true`.
 
 ### Outbound
 
