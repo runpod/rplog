@@ -1,0 +1,17 @@
+name: govulncheck
+
+on:
+  pull_request:
+  # New vulns are published without code changes. Scheduled runs use the default branch (master).
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: 1.27.3
+          go-package: ./...

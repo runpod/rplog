@@ -95,6 +95,19 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+`*gin.Engine` is an `http.Handler`, so gin services wrap the engine the same way:
+
+```go
+router := gin.New()
+// router.Use(...), routes ...
+srv := &http.Server{Addr: ":8080", Handler: trace.ServerMiddleware(router)}
+```
+
+In gin handlers, use `c.Request.Context()`, not `c`, as the context. By default
+`(*gin.Context).Value` does not fall back to the request context, so
+`trace.FromCtx(c)` finds no trace, logs lose the trace fields, and outbound
+calls start a new trace. Alternatively, set `router.ContextWithFallback = true`.
+
 ### Outbound
 
 Build one client at startup and inject it wherever the service makes requests:
