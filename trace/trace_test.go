@@ -378,14 +378,15 @@ func TestServerMiddlewarePutsTraceInContext(t *testing.T) {
 // Inbound trace headers on the wire must survive ServerMiddleware -> ctx ->
 // ClientMiddleware and arrive on the downstream request.
 func TestHeadersRoundTripOverTheWire(t *testing.T) {
+	t.Parallel()
 	var downstream http.Header
-	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	down := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		downstream = r.Header.Clone()
 	}))
 	defer down.Close()
 
 	client := &http.Client{Transport: ClientMiddleware(http.DefaultTransport)}
-	mid := httptest.NewServer(ServerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mid := httptest.NewServer(ServerMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, down.URL, nil)
 		if err != nil {
 			t.Errorf("NewRequest: %v", err)
@@ -396,12 +397,17 @@ func TestHeadersRoundTripOverTheWire(t *testing.T) {
 			t.Errorf("downstream request: %v", err)
 			return
 		}
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close downstream body: %v", err)
+		}
 	})))
 	defer mid.Close()
 
 	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
-	req, _ := http.NewRequest(http.MethodGet, mid.URL, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, mid.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
 	req.Header.Set(headerTraceID, sampleTraceID)
 	req.Header.Set(headerRequestID, sampleRequestID)
 	req.Header.Set(headerTraceSource, sampleSource)
@@ -410,7 +416,9 @@ func TestHeadersRoundTripOverTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inbound request: %v", err)
 	}
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close inbound body: %v", err)
+	}
 
 	if downstream == nil {
 		t.Fatal("downstream server received no request")
