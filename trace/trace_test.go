@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -371,6 +372,68 @@ func TestServerMiddlewarePutsTraceInContext(t *testing.T) {
 	}
 	if seen.TraceID != "trace-from-header" {
 		t.Errorf("TraceID = %q, want %q", seen.TraceID, "trace-from-header")
+	}
+}
+
+// Inbound trace headers on the wire must survive ServerMiddleware -> ctx ->
+// ClientMiddleware and arrive on the downstream request.
+func TestHeadersRoundTripOverTheWire(t *testing.T) {
+	t.Parallel()
+	var downstream http.Header
+	down := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		downstream = r.Header.Clone()
+	}))
+	defer down.Close()
+
+	client := &http.Client{Transport: ClientMiddleware(http.DefaultTransport)}
+	mid := httptest.NewServer(ServerMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, down.URL, nil)
+		if err != nil {
+			t.Errorf("NewRequest: %v", err)
+			return
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Errorf("downstream request: %v", err)
+			return
+		}
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close downstream body: %v", err)
+		}
+	})))
+	defer mid.Close()
+
+	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, mid.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set(headerTraceID, sampleTraceID)
+	req.Header.Set(headerRequestID, sampleRequestID)
+	req.Header.Set(headerTraceSource, sampleSource)
+	req.Header.Set(headerTraceStart, start.Format(time.RFC3339))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("inbound request: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close inbound body: %v", err)
+	}
+
+	if downstream == nil {
+		t.Fatal("downstream server received no request")
+	}
+	if got := downstream.Get(headerTraceID); got != sampleTraceID {
+		t.Errorf("X-Trace-ID = %q, want %q", got, sampleTraceID)
+	}
+	if got := downstream.Get(headerRequestID); !validID(got) || got == sampleRequestID {
+		t.Errorf("X-Request-ID = %q, want a fresh valid id", got)
+	}
+	if got := downstream.Get(headerTraceSource); got != sampleSource {
+		t.Errorf("X-Trace-Source = %q, want %q", got, sampleSource)
+	}
+	if got := downstream.Get(headerTraceStart); got != start.Format(time.RFC3339) {
+		t.Errorf("X-Trace-Start = %q, want %q", got, start.Format(time.RFC3339))
 	}
 }
 
